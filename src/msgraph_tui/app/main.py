@@ -150,10 +150,10 @@ class GraphdeckApp(App):
     #nav-tree { width: 30; border-right: solid $primary-darken-2; }
     #content { padding: 0 1; }
     #status-bar {
-        dock: bottom; height: 1; background: $primary-darken-3; color: $text;
+        height: 1; background: $primary-darken-3; color: $text;
         padding: 0 1;
     }
-    #logs-panel { dock: bottom; height: 12; border-top: heavy $primary; display: none; }
+    #logs-panel { height: 12; border-top: heavy $primary; display: none; }
     #logs-panel.visible { display: block; }
 
     .view-title { text-style: bold; color: $accent; padding: 0 0 1 0; }
@@ -172,10 +172,11 @@ class GraphdeckApp(App):
     .session-view { padding: 1; }
 
     .modal-box {
-        width: 70; max-height: 90%; background: $surface;
+        width: 70; height: auto; max-height: 90%; background: $surface;
         border: thick $primary; padding: 1 2;
     }
     .modal-wide { width: 100; }
+    .modal-box VerticalScroll { height: auto; max-height: 24; }
     ModalScreen { align: center middle; }
     .modal-title { text-style: bold; color: $accent; }
     .modal-subtitle { color: $text-muted; margin: 0 0 1 0; }
