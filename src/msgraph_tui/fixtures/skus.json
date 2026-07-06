@@ -1,0 +1,6 @@
+[
+  {"skuId": "sku-e5", "skuPartNumber": "SPE_E5", "displayName": "Microsoft 365 E5", "prepaidUnits": {"enabled": 10, "suspended": 0, "warning": 0}, "consumedUnits": 5, "capabilityStatus": "Enabled"},
+  {"skuId": "sku-e3", "skuPartNumber": "SPE_E3", "displayName": "Microsoft 365 E3", "prepaidUnits": {"enabled": 15, "suspended": 0, "warning": 0}, "consumedUnits": 4, "capabilityStatus": "Enabled"},
+  {"skuId": "sku-visio", "skuPartNumber": "VISIOCLIENT", "displayName": "Visio Plan 2", "prepaidUnits": {"enabled": 3, "suspended": 0, "warning": 0}, "consumedUnits": 1, "capabilityStatus": "Enabled"},
+  {"skuId": "sku-f3", "skuPartNumber": "SPE_F1", "displayName": "Microsoft 365 F3", "prepaidUnits": {"enabled": 20, "suspended": 0, "warning": 0}, "consumedUnits": 0, "capabilityStatus": "Enabled"}
+]

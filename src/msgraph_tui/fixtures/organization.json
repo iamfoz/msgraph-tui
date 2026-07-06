@@ -1,0 +1,6 @@
+{
+  "id": "tenant-contoso-mock",
+  "displayName": "Contoso Ltd (Mock Tenant)",
+  "verifiedDomains": [{"name": "contoso.example", "isDefault": true}],
+  "tenantType": "AAD"
+}

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msgraph-tui"
+version = "0.1.0"
+description = "Graphdeck: a provider-transparent Microsoft 365 administration console for the terminal"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "textual>=0.80",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+live = ["msal>=1.28"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+graphdeck = "msgraph_tui.app.main:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+msgraph_tui = ["fixtures/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

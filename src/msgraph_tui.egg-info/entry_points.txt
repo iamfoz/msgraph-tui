@@ -1,0 +1,2 @@
+[console_scripts]
+graphdeck = msgraph_tui.app.main:run
