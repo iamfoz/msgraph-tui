@@ -70,8 +70,8 @@ docs/                PRD, this file, capability matrix, guides
 
 ## 4. Key contracts
 
-- **`ActionDefinition`** (`core/actions.py`): full declarative contract per PRD §13, with `GraphTemplate`, `PowerShellTemplate`, `ParamSpec`, `RollbackSpec` (read-action reference, changed-field extractor, inverse-request builder). Registry validates on registration.
-- **`ResultEnvelope`** (`core/envelope.py`): the single result type per PRD §14.
+- **`ActionDefinition`** (`core/actions.py`): full declarative action contract (see the action-registry contract in `developer-guide.md`), with `GraphTemplate`, `PowerShellTemplate`, `ParamSpec`, `RollbackSpec` (read-action reference, changed-field extractor, inverse-request builder). Registry validates on registration.
+- **`ResultEnvelope`** (`core/envelope.py`): the single common result envelope returned by every engine.
 - **`Provider`** (`core/providers.py`): `name`, `is_available()`, `supports(action)`, `preview(action, params)`, `execute(action, params)`.
 - **Provider selection** (`core/selection.py`): mock-mode override → per-action user preference → per-service preference → action preferred → remaining supported; filters out unavailable engines and beta-requiring providers when beta is disabled; returns the choice *and the reasons*, which the UI displays.
 - **`AuditLog`** (`compliance/audit.py`): append-only JSONL, `entry_hash = sha256(prev_hash + canonical_json(entry))`, `verify()` returns first divergence.
