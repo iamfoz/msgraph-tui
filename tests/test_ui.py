@@ -5,7 +5,7 @@ from textual.widgets import Static
 
 from msgraph_tui.app.main import GraphdeckApp
 from msgraph_tui.app.modals import PreviewConfirmModal
-from msgraph_tui.app.views import BrowseView
+from msgraph_tui.app.views import BrowseView, SessionView
 from msgraph_tui.compliance.audit import ChangeReason
 from msgraph_tui.core.config import AppConfig, Mode
 from msgraph_tui.services.context import build_context
@@ -14,6 +14,42 @@ from msgraph_tui.services.context import build_context
 def _app(tmp_path) -> GraphdeckApp:
     cfg = AppConfig(mode=Mode.MOCK, state_dir=tmp_path / "state")
     return GraphdeckApp(build_context(cfg))
+
+
+class _FakeTokenProvider:
+    def get_token(self) -> str:
+        return "fake-token"
+
+    def account_label(self) -> str:
+        return "admin@contoso.example"
+
+
+async def test_sign_in_wires_graph_rest_in_live_mode(tmp_path):
+    cfg = AppConfig(mode=Mode.LIVE, tenant_id="t", client_id="c", state_dir=tmp_path / "s")
+    app = GraphdeckApp(build_context(cfg))
+    async with app.run_test(size=(140, 46)) as pilot:
+        await pilot.pause(0.2)
+        assert not app.ctx.graph_rest.is_available()  # no token yet
+        app.switch_view("session")
+        await pilot.pause(0.2)
+        sv = app.query_one("#view-session", SessionView)
+        sv._apply_sign_in(_FakeTokenProvider())
+        await pilot.pause(0.1)
+        assert app.ctx.graph_rest.is_available()
+        assert app.ctx.session.actor == "admin@contoso.example"
+        assert "device code" in app.ctx.session.auth_mode
+
+
+async def test_sign_in_is_noop_in_mock_mode(tmp_path):
+    app = _app(tmp_path)  # mock mode
+    async with app.run_test(size=(140, 46)) as pilot:
+        await pilot.pause(0.2)
+        app.switch_view("session")
+        await pilot.pause(0.2)
+        sv = app.query_one("#view-session", SessionView)
+        sv.start_sign_in()  # should warn and not attach anything
+        await pilot.pause(0.1)
+        assert not app.ctx.graph_rest.is_available()
 
 
 async def test_dashboard_posture_tiles(tmp_path):

@@ -13,6 +13,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
 from ..compliance.evidence import generate_evidence_pack
+from ..core.config import Mode
 from ..core.errors import GraphdeckError
 from ..core.export import export_rows, render
 from ..core.redaction import redact
@@ -475,6 +476,16 @@ class DashboardView(Vertical):
 # Session / providers
 # ---------------------------------------------------------------------------
 
+def _default_device_code_factory(config, message_callback):
+    from ..providers.graph_rest import MsalDeviceCodeTokenProvider
+
+    return MsalDeviceCodeTokenProvider(config, message_callback=message_callback)
+
+
+# Overridable in tests so the sign-in wiring can be exercised without MSAL/network.
+device_code_factory = _default_device_code_factory
+
+
 class SessionView(Vertical):
     BINDINGS = [("r", "refresh", "Refresh")]
 
@@ -488,6 +499,7 @@ class SessionView(Vertical):
             yield Static("", id="session-info", classes="dash-tile")
             yield Static("", id="provider-info", classes="dash-tile")
             with Horizontal(classes="modal-buttons"):
+                yield Button("Sign in (device code)", id="sign-in", variant="primary")
                 yield Button("Check PowerShell modules", id="check-modules")
                 yield Button("Verify audit chain", id="verify-audit")
                 yield Button("Export evidence pack", id="evidence")
@@ -531,6 +543,52 @@ class SessionView(Vertical):
         self.action_refresh()
         self.app.notify("Module check complete. Graphdeck never installs modules itself; "
                         "see each provider's guidance above.")
+
+    @on(Button.Pressed, "#sign-in")
+    def start_sign_in(self) -> None:
+        if self.ctx.config.mode is not Mode.LIVE:
+            self.app.notify(
+                f"Sign-in applies to live mode only — {self.ctx.config.mode.value} mode "
+                "uses fixtures and needs no credentials.",
+                severity="warning",
+            )
+            return
+        if not (self.ctx.config.tenant_id and self.ctx.config.client_id):
+            self.app.notify(
+                "Set tenant_id and client_id in the config file before signing in.",
+                severity="error", timeout=12,
+            )
+            return
+        self.app.notify("Starting device-code sign-in…")
+        self._run_sign_in()
+
+    @work(thread=True)
+    def _run_sign_in(self) -> None:
+        def show(message: str) -> None:
+            self.app.call_from_thread(self.app.notify, message, timeout=45)
+
+        try:
+            token_provider = device_code_factory(self.ctx.config, show)
+            token_provider.get_token()  # blocks; prompts the device code via show()
+        except Exception as exc:  # auth-library / network errors are user-facing
+            from ..core.redaction import redact_text
+            self.app.call_from_thread(
+                self.app.notify, f"Sign-in failed: {redact_text(str(exc))}",
+                severity="error", timeout=15,
+            )
+            return
+        self.app.call_from_thread(self._apply_sign_in, token_provider)
+
+    def _apply_sign_in(self, token_provider) -> None:
+        """Attach a signed-in token provider and refresh session context."""
+        self.ctx.graph_rest.attach_token_provider(token_provider)
+        self.ctx.session.actor = token_provider.account_label()
+        self.ctx.session.auth_mode = "delegated (device code)"
+        self.action_refresh()
+        update = getattr(self.app, "_update_status_bar", None)
+        if callable(update):
+            update()
+        self.app.notify(f"Signed in as {self.ctx.session.actor}. Graph REST is now available.")
 
     @on(Button.Pressed, "#verify-audit")
     def verify_audit(self) -> None:

@@ -125,6 +125,10 @@ class GraphRestProvider(Provider):
     def is_available(self) -> bool:
         return self._token_provider is not None
 
+    def attach_token_provider(self, token_provider: TokenProvider) -> None:
+        """Wire a signed-in token provider (called by the Session sign-in flow)."""
+        self._token_provider = token_provider
+
     def availability_detail(self) -> str:
         if self._token_provider is None:
             return "not connected (sign in from the Session screen)"
