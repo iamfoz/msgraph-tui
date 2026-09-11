@@ -167,7 +167,7 @@ class PowerShellProvider(Provider):
         stderr_redacted = redact_text(stderr.strip())
         if code != 0 or (not stdout.strip() and stderr.strip()):
             kind = classify_ps_stderr(stderr)
-            category = _STDERR_CATEGORY.get(kind, ErrorCategory.UNKNOWN)
+            category = _STDERR_CATEGORY.get(kind or "", ErrorCategory.UNKNOWN)
             err = NormalizedError(
                 category=category,
                 message=(stderr_redacted.splitlines() or [f"PowerShell exited with code {code}"])[0][:300],

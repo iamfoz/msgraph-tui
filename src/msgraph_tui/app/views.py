@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -167,7 +167,7 @@ class BrowseView(Vertical):
     @work
     async def run_detail(self) -> None:
         row = self._current_row()
-        if row is None:
+        if row is None or not self.spec.detail_action or not self.spec.detail_param:
             return
         params = {self.spec.detail_param: row.get("id") or row.get(self.spec.detail_param)}
         envelope = await self.ctx.executor.read(self.spec.detail_action, params)
@@ -523,7 +523,7 @@ class AuditView(Vertical):
 
     def action_verify(self) -> None:
         result = self.ctx.audit_log.verify()
-        severity = "information" if result.ok else "error"
+        severity: Literal["information", "error"] = "information" if result.ok else "error"
         self.app.notify(
             f"Audit chain: {'INTACT' if result.ok else 'BROKEN'} — {result.detail} "
             f"({result.entries} entries)",

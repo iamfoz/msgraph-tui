@@ -103,7 +103,7 @@ class WriteFormModal(ModalScreen[dict | None]):
             widget = self.query_one(f"#field-{spec.name}")
             if isinstance(widget, Checkbox):
                 values[spec.name] = widget.value
-            else:
+            elif isinstance(widget, Input):
                 raw = widget.value.strip()
                 if raw != "":
                     values[spec.name] = raw

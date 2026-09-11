@@ -77,3 +77,34 @@ def test_preview_contains_method_url_and_body():
     text = build_graph_request(action, {"u": "u1", "a": "x"}).preview_text()
     assert text.startswith("PATCH https://graph.microsoft.com/v1.0/users/u1")
     assert '"a": "x"' in text
+
+
+def test_embedded_filter_placeholder_is_substituted():
+    """Regression: an embedded {param} inside a larger $filter string must be
+    substituted, not passed through as the literal '{param}'."""
+    action = _action(GraphTemplate(
+        method="GET", path="/users",
+        query={"$filter": "assignedLicenses/any(x:x/skuId eq {sku_id})"},
+    ))
+    url = build_graph_request(action, {"sku_id": "sku-e5"}).url
+    assert "{sku_id}" not in url
+    # decode + / %20 to compare the OData clause
+    decoded = url.replace("%2F", "/").replace("+", " ").replace("%20", " ")
+    assert "skuId eq sku-e5" in decoded
+
+
+def test_embedded_placeholder_missing_drops_value():
+    action = _action(GraphTemplate(
+        method="GET", path="/users", query={"$filter": "id eq {missing}"},
+    ))
+    # absent param -> whole $filter dropped, never left as literal
+    assert build_graph_request(action, {}).url == "https://graph.microsoft.com/v1.0/users"
+
+
+def test_multi_placeholder_string_substituted():
+    action = _action(GraphTemplate(
+        method="GET", path="/users", query={"$filter": "{a} and {b}"},
+    ))
+    url = build_graph_request(action, {"a": "x eq 1", "b": "y eq 2"}).url
+    decoded = url.replace("+", " ").replace("%20", " ")
+    assert "x eq 1 and y eq 2" in decoded

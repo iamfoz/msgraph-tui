@@ -204,7 +204,9 @@ class Executor:
             # PRD §17: no captured before-state -> no rollback offer
             plan.snapshot = None
             return
-        inverse_action_id, inverse_params, inverse_preview = None, {}, ""
+        inverse_action_id: str | None = None
+        inverse_params: dict[str, Any] = {}
+        inverse_preview = ""
         if spec.build_inverse is not None:
             inverse_action_id, inverse_params = spec.build_inverse(plan.params, plan.before_state)
             try:
@@ -267,10 +269,11 @@ class Executor:
         envelope.operation_id = plan.operation_id
 
         after_state: dict[str, Any] = {}
-        if envelope.success and plan.action.rollback.read_action:
+        read_action = plan.action.rollback.read_action
+        if envelope.success and read_action:
             spec = plan.action.rollback
             read_params = {rp: plan.params.get(src) for rp, src in spec.read_param_map.items()}
-            after_env = await self.read(spec.read_action, read_params, audit=False)
+            after_env = await self.read(read_action, read_params, audit=False)
             if after_env.success:
                 after_state = self._state_from_envelope(after_env, spec.tracked_fields)
 

@@ -8,9 +8,15 @@ shape, only fill declared slots.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, urlencode
+
+# A template placeholder: {identifier}. Used for both whole-value substitution
+# (the value IS a single placeholder, preserving the param's Python type) and
+# embedded substitution inside a larger string (e.g. an OData $filter).
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 from ..core.actions import ActionDefinition, GraphTemplate
 
@@ -55,14 +61,37 @@ _MISSING = object()
 
 
 def _fill_value(value: Any, params: dict[str, Any]) -> Any:
-    """Whole-value {param} substitution in query/body templates.
+    """Substitute {param} placeholders in query/body templates.
 
-    A placeholder referencing an absent param resolves to _MISSING and the
-    containing dict key / list item is dropped — this is how optional PATCH
-    body fields work (required params are enforced earlier by ParamSpec).
+    Two forms are supported:
+      * whole-value  ("{top}")           -> the param's Python value is kept
+        (int/list/bool preserved); an absent param resolves to _MISSING so the
+        containing dict key / list item is dropped (optional PATCH fields).
+      * embedded    ("... eq {sku_id}")  -> each placeholder is replaced
+        textually; if any referenced param is absent/None the whole value is
+        dropped (_MISSING), never left as a literal "{sku_id}".
+
+    Required params are enforced earlier by ParamSpec, so a dropped required
+    filter is not reachable in practice.
     """
-    if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
-        return params.get(value[1:-1], _MISSING)
+    if isinstance(value, str):
+        whole = _PLACEHOLDER.fullmatch(value)
+        if whole is not None:
+            return params.get(whole.group(1), _MISSING)
+        if _PLACEHOLDER.search(value):
+            dropped = False
+
+            def _sub(m: re.Match[str]) -> str:
+                nonlocal dropped
+                v = params.get(m.group(1))
+                if v is None:
+                    dropped = True
+                    return ""
+                return str(v)
+
+            filled_text = _PLACEHOLDER.sub(_sub, value)
+            return _MISSING if dropped else filled_text
+        return value
     if isinstance(value, dict):
         filled = {k: _fill_value(v, params) for k, v in value.items()}
         return {k: v for k, v in filled.items() if v is not _MISSING}
