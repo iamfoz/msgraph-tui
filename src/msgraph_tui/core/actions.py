@@ -60,6 +60,11 @@ class ViewType(str, Enum):
     FORM = "form"
 
 
+# Reserved control parameters callers may pass alongside declared action
+# params. Everything else prefixed with "_" is rejected as unknown.
+RESERVED_PARAMS: frozenset[str] = frozenset({"_simulate"})
+
+
 @dataclass
 class ParamSpec:
     name: str
@@ -192,7 +197,9 @@ class ActionDefinition:
     def validate_params(self, values: dict[str, Any]) -> dict[str, Any]:
         """Coerce and validate user-supplied params against the specs."""
         known = {p.name for p in self.params}
-        internal = {k for k in values if k.startswith("_")}  # e.g. _simulate
+        # Only a known reserved set of underscore-prefixed control params is
+        # allowed through; arbitrary "_x" keys are rejected like any unknown.
+        internal = {k for k in values if k in RESERVED_PARAMS}
         unknown = set(values) - known - internal
         if unknown:
             raise ValueError(f"Unknown parameter(s) for {self.id}: {sorted(unknown)}")

@@ -9,11 +9,30 @@ both. All locations are documented in docs/user-guide.md.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+log = logging.getLogger("graphdeck.config")
+
+# Recognised Microsoft identity/Graph hosts (incl. sovereign clouds). Bearer
+# tokens are only ever sent to hosts named by graph_base/authority, so an
+# unexpected host here is flagged loudly.
+_MICROSOFT_HOSTS = (
+    "graph.microsoft.com",
+    "graph.microsoft.us",
+    "dod-graph.microsoft.us",
+    "microsoftgraph.chinacloudapi.cn",
+    "login.microsoftonline.com",
+    "login.microsoftonline.us",
+    "login.partner.microsoftonline.cn",
+    "login.chinacloudapi.cn",
+)
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 class Mode(str, Enum):
@@ -56,6 +75,9 @@ class AppConfig:
     powershell_executable: str | None = None   # auto-detect if None
     state_dir: Path = field(default_factory=default_state_dir)
     fixtures_dir: Path | None = None            # override bundled fixtures
+    # Optional path to a key file; when set, the audit chain is HMAC-signed so
+    # it cannot be silently reforged without the key. See docs/security-model.md.
+    audit_hmac_key_path: Path | None = None
 
     @property
     def audit_dir(self) -> Path:
@@ -79,6 +101,37 @@ class AppConfig:
 
     def provider_preference_for(self, action_id: str, service: str) -> str | None:
         return self.provider_preferences.get(action_id) or self.provider_preferences.get(service)
+
+    def audit_hmac_key(self) -> bytes | None:
+        """Read the audit signing key, if a key path is configured."""
+        if self.audit_hmac_key_path is None:
+            return None
+        key = Path(self.audit_hmac_key_path).expanduser().read_bytes().strip()
+        if not key:
+            raise ValueError(f"Audit HMAC key file is empty: {self.audit_hmac_key_path}")
+        return key
+
+    def validate_endpoints(self) -> list[str]:
+        """Reject non-HTTPS endpoints and warn on non-Microsoft hosts, so a
+        planted/typo'd config cannot silently ship bearer tokens off-tenant.
+        Returns a list of human-readable warnings."""
+        warnings: list[str] = []
+        for label, url in (("graph_base", self.graph_base), ("authority", self.authority)):
+            parsed = urlparse(url.replace("{tenant}", "tenant"))
+            if parsed.scheme != "https" and parsed.hostname not in _LOCAL_HOSTS:
+                raise ValueError(
+                    f"{label} must use https:// (got {url!r}) — refusing to send "
+                    "credentials over an insecure or unexpected scheme."
+                )
+            host = parsed.hostname or ""
+            if host not in _LOCAL_HOSTS and not any(
+                host == h or host.endswith("." + h) for h in _MICROSOFT_HOSTS
+            ):
+                warnings.append(
+                    f"{label} host {host!r} is not a recognised Microsoft endpoint — "
+                    "verify this is intentional (sovereign cloud?) before signing in."
+                )
+        return warnings
 
 
 _ENV_MAP = {
@@ -108,11 +161,13 @@ def load_config(path: Path | None = None) -> AppConfig:
             continue  # forward-compatible: ignore unknown keys
         if key == "mode":
             value = Mode(value)
-        elif key in ("state_dir", "fixtures_dir") and value is not None:
+        elif key in ("state_dir", "fixtures_dir", "audit_hmac_key_path") and value is not None:
             value = Path(value).expanduser()
         elif key == "allow_beta" and isinstance(value, str):
             value = value.strip().lower() in ("1", "true", "yes")
         setattr(cfg, key, value)
+    for warning in cfg.validate_endpoints():
+        log.warning("%s", warning)
     return cfg
 
 

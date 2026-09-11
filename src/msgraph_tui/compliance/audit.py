@@ -13,14 +13,24 @@ never contain secrets, tokens, passwords or private key material.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..core.envelope import utc_now_iso
 from ..core.redaction import redact
+
+try:  # POSIX advisory file locking for safe concurrent appends
+    import fcntl
+
+    _HAVE_FCNTL = True
+except ImportError:  # pragma: no cover - Windows fallback (best-effort)
+    _HAVE_FCNTL = False
 
 GENESIS_HASH = "0" * 64
 
@@ -101,36 +111,111 @@ class VerificationResult:
 
 
 class AuditLog:
-    """Append-only, hash-chained JSONL audit log."""
+    """Append-only, hash-chained JSONL audit log.
 
-    def __init__(self, path: Path) -> None:
+    Integrity is layered:
+
+    - **Hash chain** — each entry embeds ``prev_hash`` and
+      ``entry_hash = digest(prev_hash + canonical(entry))``. Detects in-place
+      edits and reordering.
+    - **Head anchor** — a sidecar ``<log>.head`` records the current entry
+      count and chain-head hash, updated atomically on each append. ``verify()``
+      compares the walked chain against it, so **tail truncation** and
+      out-of-band appends are detected (a plain self-contained chain cannot see
+      its own tail being cut).
+    - **Optional HMAC keying** — pass ``hmac_key`` and entries are signed with
+      HMAC-SHA256 instead of a bare hash, so the chain cannot be silently
+      reforged without the operator's key. Without a key the log is
+      tamper-*evident* (accidental corruption, naive edits), not
+      tamper-*proof* against a motivated local admin — see the security model.
+    - **Advisory locking** — appends take an exclusive lock so concurrent
+      writers cannot interleave and corrupt the chain.
+    """
+
+    def __init__(self, path: Path, hmac_key: bytes | None = None) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._last_hash = self._recover_last_hash()
+        self._hmac_key = hmac_key
+        self._head_path = path.with_name(path.name + ".head")
+        self._lock_path = path.with_name(path.name + ".lock")
+        self._last_hash, self._count = self._recover_state()
 
-    def _recover_last_hash(self) -> str:
+    @property
+    def algorithm(self) -> str:
+        return "hmac-sha256" if self._hmac_key else "sha256"
+
+    def _digest(self, prev: str, record: dict[str, Any]) -> str:
+        payload = (prev + canonical_json(record)).encode("utf-8")
+        if self._hmac_key is not None:
+            return hmac.new(self._hmac_key, payload, hashlib.sha256).hexdigest()
+        return hashlib.sha256(payload).hexdigest()
+
+    def _recover_state(self) -> tuple[str, int]:
         if not self.path.exists():
-            return GENESIS_HASH
-        last = GENESIS_HASH
+            return GENESIS_HASH, 0
+        last, count = GENESIS_HASH, 0
         with self.path.open("r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
                     continue
+                count += 1
                 try:
                     last = json.loads(line).get("entry_hash", last)
                 except json.JSONDecodeError:
                     continue  # verify() will surface corruption explicitly
-        return last
+        return last, count
+
+    @contextmanager
+    def _exclusive_lock(self):
+        """Cross-process advisory lock; best-effort where fcntl is absent."""
+        fh = open(self._lock_path, "a+")  # noqa: SIM115 - closed in finally
+        try:
+            if _HAVE_FCNTL:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                if _HAVE_FCNTL:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            finally:
+                fh.close()
+
+    def _write_head(self) -> None:
+        head = {
+            "count": self._count,
+            "entry_hash": self._last_hash,
+            "algorithm": self.algorithm,
+            "updated": utc_now_iso(),
+        }
+        tmp = self._head_path.with_name(self._head_path.name + ".tmp")
+        tmp.write_text(canonical_json(head) + "\n", encoding="utf-8")
+        os.replace(tmp, self._head_path)  # atomic
+
+    def _read_head(self) -> dict[str, Any] | None:
+        if not self._head_path.exists():
+            return None
+        try:
+            return json.loads(self._head_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
 
     def append(self, event: AuditEvent) -> dict[str, Any]:
         record = event.to_record()
-        prev = self._last_hash
-        entry_hash = hashlib.sha256((prev + canonical_json(record)).encode("utf-8")).hexdigest()
-        stored = dict(record, prev_hash=prev, entry_hash=entry_hash)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(canonical_json(stored) + "\n")
-        self._last_hash = entry_hash
+        with self._exclusive_lock():
+            # Re-read the true tail under the lock so concurrent writers can
+            # never both chain off a stale prev_hash.
+            self._last_hash, self._count = self._recover_state()
+            prev = self._last_hash
+            entry_hash = self._digest(prev, record)
+            stored = dict(record, prev_hash=prev, entry_hash=entry_hash)
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(canonical_json(stored) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            self._last_hash = entry_hash
+            self._count += 1
+            self._write_head()
         return stored
 
     def entries(self) -> list[dict[str, Any]]:
@@ -150,7 +235,13 @@ class AuditLog:
     def verify(self) -> VerificationResult:
         prev = GENESIS_HASH
         count = 0
+        head = self._read_head()
         if not self.path.exists():
+            if head and head.get("count", 0) > 0:
+                return VerificationResult(
+                    False, 0, None,
+                    "audit log missing but head anchor records entries (log deleted?)",
+                )
             return VerificationResult(ok=True, entries=0, detail="no audit log yet")
         with self.path.open("r", encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, start=1):
@@ -167,9 +258,7 @@ class AuditLog:
                 record = {
                     k: v for k, v in stored.items() if k not in ("prev_hash", "entry_hash")
                 }
-                expected = hashlib.sha256(
-                    (prev + canonical_json(record)).encode("utf-8")
-                ).hexdigest()
+                expected = self._digest(prev, record)
                 if claimed_prev != prev:
                     return VerificationResult(
                         False, count, lineno, "previous-hash link broken (entry inserted/removed?)"
@@ -179,4 +268,26 @@ class AuditLog:
                         False, count, lineno, "entry content does not match its hash (tampered?)"
                     )
                 prev = claimed_hash
-        return VerificationResult(ok=True, entries=count)
+        # Compare the walked chain against the out-of-band head anchor. This is
+        # what catches tail truncation, which a self-contained chain cannot.
+        if head is not None:
+            anchored_algo = head.get("algorithm")
+            if anchored_algo and anchored_algo != self.algorithm:
+                return VerificationResult(
+                    False, count, None,
+                    f"algorithm mismatch: anchor={anchored_algo}, verifier={self.algorithm} "
+                    "(wrong or missing signing key?)",
+                )
+            if head.get("count") != count:
+                return VerificationResult(
+                    False, count, None,
+                    f"entry count {count} does not match anchored count {head.get('count')} "
+                    "(entries truncated or appended out of band?)",
+                )
+            if head.get("entry_hash") != prev:
+                return VerificationResult(
+                    False, count, None,
+                    "chain head does not match the head anchor (tail rewritten or truncated?)",
+                )
+            return VerificationResult(ok=True, entries=count, detail="chain intact; matches head anchor")
+        return VerificationResult(ok=True, entries=count, detail="chain intact (no head anchor present)")

@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from logging.handlers import TimedRotatingFileHandler
 
 from ..compliance.audit import AuditLog
 from ..compliance.rollback import RollbackStore
 from ..core.actions import ActionRegistry
 from ..core.config import AppConfig, Mode
 from ..core.providers import ProviderRegistry
+from ..core.redaction import redact_text
 from ..modules import build_registry
 from ..providers.graph_rest import GraphRestProvider
 from ..providers.graph_sdk import GraphSdkProvider
@@ -35,10 +37,30 @@ class AppContext:
     graph_rest: GraphRestProvider
 
 
+class _RedactingFilter(logging.Filter):
+    """Guarantees redaction at the stream, not the call site — so any future
+    log line carrying untrusted data cannot leak secrets to disk."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            record.msg = redact_text(record.getMessage())
+            record.args = ()
+        except Exception:  # pragma: no cover - never let logging crash the app
+            pass
+        return True
+
+
 def _setup_debug_logging(config: AppConfig) -> None:
-    """Debug log is a separate stream from the audit log (PRD data handling)."""
-    handler = logging.FileHandler(config.debug_log_path, encoding="utf-8")
+    """Debug log is a separate, redacted, rotated stream — kept apart from the
+    audit log (PRD data handling)."""
+    handler = TimedRotatingFileHandler(
+        config.debug_log_path,
+        when="midnight",
+        backupCount=max(1, config.debug_log_retention_days),
+        encoding="utf-8",
+    )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.addFilter(_RedactingFilter())
     root = logging.getLogger("graphdeck")
     root.setLevel(logging.INFO)
     if not any(isinstance(h, logging.FileHandler) for h in root.handlers):
@@ -54,7 +76,9 @@ def build_context(config: AppConfig) -> AppContext:
 
     mock = MockProvider(fixtures_dir=config.fixtures_dir)
     providers.register(mock)
-    graph_rest = GraphRestProvider(config)  # token provider attached at sign-in
+    # Token provider is attached later by the Session screen's sign-in flow
+    # (SessionView.sign_in); until then graph_rest reports itself unavailable.
+    graph_rest = GraphRestProvider(config)
     providers.register(graph_rest)
     providers.register(GraphSdkProvider())
     for ps in make_powershell_providers(config.powershell_executable):
@@ -76,7 +100,7 @@ def build_context(config: AppConfig) -> AppContext:
             auth_mode="none",
         )
 
-    audit_log = AuditLog(config.audit_dir / "audit.jsonl")
+    audit_log = AuditLog(config.audit_dir / "audit.jsonl", hmac_key=config.audit_hmac_key())
     rollback_store = RollbackStore(config.snapshots_dir)
     executor = Executor(config, actions, providers, audit_log, rollback_store, session)
     return AppContext(

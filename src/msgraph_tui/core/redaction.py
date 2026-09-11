@@ -3,8 +3,11 @@
 Every string or mapping that crosses an output boundary (previews, logs, audit
 events, exports, error details) MUST pass through this module. It combines:
 
-  1. a deny-list of sensitive key names (case-insensitive, substring match), and
-  2. pattern scrubbing for token/secret shapes inside free text.
+  1. a deny-list of sensitive key names (case-insensitive, substring match),
+  2. pattern scrubbing for token/secret shapes inside free text, and
+  3. scrubbing of secret *values* rendered into command strings (e.g. a
+     PowerShell ``-Password 'value'`` parameter), which the key-name and
+     ``key=value`` rules would otherwise miss.
 
 The audit log must never contain secrets — this module is the enforcement point
 and is covered by dedicated tests.
@@ -13,6 +16,7 @@ and is covered by dedicated tests.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 REDACTED = "***REDACTED***"
@@ -34,6 +38,10 @@ SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "api_key",
     "apikey",
     "passphrase",
+    "accountkey",
+    "account_key",
+    "signing_key",
+    "sas_url",
 )
 
 # Keys that merely *mention* certificates/credentials but hold safe metadata.
@@ -47,20 +55,56 @@ SAFE_KEY_EXCEPTIONS: tuple[str, ...] = (
     "password_policies",
 )
 
-_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Secret-shaped keywords used inside key=value / key: value free text. The
+# separator tolerates surrounding quotes so dict-repr'd secrets are caught too,
+# e.g.  "'refresh_token': '0.AY...'"  and connection-string  "AccountKey=..;".
+_KV_KEYWORDS = (
+    "client_secret|clientsecret|password|pwd|refresh_token|access_token|id_token"
+    "|sig|sharedaccesskey|accountkey|client_assertion|assertion"
+    "|api_key|apikey|passphrase"
+)
+
+# PowerShell (and CLI) secret parameters: -Password 'value' / -ClientSecret x.
+_PS_SECRET_PARAMS = (
+    "password|secret|clientsecret|client_secret|token|credential|pwd|passphrase"
+    "|assertion|apikey|api_key|accountkey"
+)
+
+
+def _repl_group1_kv(m: re.Match[str]) -> str:
+    return f"{m.group(1)}={REDACTED}"
+
+
+def _repl_group1_space(m: re.Match[str]) -> str:
+    return f"{m.group(1)} {REDACTED}"
+
+
+# Ordered (pattern, replacement) rules applied to every free-text string.
+_RULES: tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], ...] = (
     # JWTs (three base64url segments starting with eyJ)
-    re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"),
-    # Bearer / Basic authorization values
-    re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"),
-    # key=value style secrets in query strings / connection strings / CLI args
-    re.compile(
-        r"(?i)\b(client_secret|password|refresh_token|access_token|id_token|sig|sharedaccesskey)"
-        r"\s*[=:]\s*[^\s&;\"']{4,}"
+    (re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"), REDACTED),
+    # PEM private-key / certificate blocks
+    (
+        re.compile(
+            r"-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----.*?-----END [A-Z ]*\1-----",
+            re.DOTALL,
+        ),
+        REDACTED,
     ),
-    # PEM blocks
-    re.compile(
-        r"-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----.*?-----END [A-Z ]*\1-----",
-        re.DOTALL,
+    # Bearer / Basic authorization values
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), _repl_group1_space),
+    # -SecretParam 'value' | -SecretParam value  (PowerShell / CLI rendered form)
+    (
+        re.compile(rf"(?i)(-(?:{_PS_SECRET_PARAMS}))\b\s+(?:'[^']*'|\"[^\"]*\"|\S+)"),
+        lambda m: f"{m.group(1)} {REDACTED}",
+    ),
+    # key=value / 'key': 'value' style secrets (query strings, connection
+    # strings, dict reprs). Quotes around key and value are tolerated.
+    (
+        re.compile(
+            rf"(?i)\b({_KV_KEYWORDS})['\"]?\s*[=:]\s*['\"]?[^\s,&;'\"]{{4,}}"
+        ),
+        _repl_group1_kv,
     ),
 )
 
@@ -77,13 +121,8 @@ def redact_text(text: str) -> str:
     if not text:
         return text
     result = text
-    for pattern in _PATTERNS:
-        if pattern.pattern.startswith("(?i)\\b(client_secret"):
-            result = pattern.sub(lambda m: f"{m.group(1)}={REDACTED}", result)
-        elif pattern.pattern.startswith("(?i)\\b(bearer|basic)"):
-            result = pattern.sub(lambda m: f"{m.group(1)} {REDACTED}", result)
-        else:
-            result = pattern.sub(REDACTED, result)
+    for pattern, repl in _RULES:
+        result = pattern.sub(repl, result)
     return result
 
 

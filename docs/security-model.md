@@ -59,7 +59,8 @@
 | Command injection via object names (a group named `'; Remove-Item …`) | Quoting/identifier validation as above. |
 | Wrong-tenant change | Single tenant context, persistent display, tenant repeated in confirmation. |
 | Unnoticed high-impact change | Risk classification, typed confirmation, before/after capture, audit chain. |
-| Local audit tampering | SHA-256 hash chain + verification command; optional export/forwarding for off-host copies. |
+| Local audit tampering | Hash chain + out-of-band **head anchor** (detects tail truncation), **advisory locking** (safe concurrent append), **optional HMAC keying** (forgery-resistant with an operator key), verification command, and optional off-host copies. |
+| Endpoint tampering (token exfiltration) | `graph_base`/`authority` validated on load — non-HTTPS is rejected and non-Microsoft hosts warn loudly before any token is sent. |
 | Malicious rollback (replaying stale state) | Drift detection blocks rollback when the object changed since the operation; blast-radius check; snapshots single-use. |
 | Over-privileged app registration | Per-action scope display encourages minimal grants; default scope set is read-only. |
 
@@ -67,9 +68,20 @@
 
 - Graphdeck runs with the operator's privileges; it cannot protect against a
   fully compromised workstation.
-- The audit chain is tamper-*evident*, not tamper-*proof*: an attacker with
-  file access could rebuild the whole chain. Forward copies (evidence packs,
-  SIEM export) to an independent system for stronger guarantees.
+- Audit integrity is layered. The hash chain catches in-place edits and
+  reordering; the head anchor (`audit.jsonl.head`) additionally catches tail
+  truncation and out-of-band appends. **Without an HMAC key** the log remains
+  tamper-*evident*, not tamper-*proof*: an attacker who can rewrite both the log
+  and its head file could rebuild a consistent chain. Configure
+  `audit_hmac_key_path` (a key the operator controls, stored apart from the
+  log) to make the chain unforgeable without that key, and/or forward copies
+  (evidence packs, SIEM export) to an independent system, for stronger
+  guarantees.
+- Redaction covers key-name matches, `key=value`/dict-repr'd secrets, JWTs,
+  Bearer/Basic values, PEM blocks, storage `AccountKey`/SAS `sig`, and secret
+  values rendered into command strings (e.g. a PowerShell `-Password 'x'`).
+  It is deny-list + pattern based; a genuinely novel secret shape in free text
+  could still slip through, so treat exports as sensitive regardless.
 - PowerShell module output is parsed defensively but modules execute with
   full user privileges — install modules only from trusted sources
   (Graphdeck never installs them for you).
