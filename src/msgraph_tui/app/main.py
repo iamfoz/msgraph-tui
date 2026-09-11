@@ -330,6 +330,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, help="path to config.json")
     parser.add_argument("--fixtures", type=Path, help="override bundled mock fixtures directory")
     parser.add_argument("--version", action="version", version=f"{PRODUCT_NAME} {__version__}")
+
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("verify-audit", help="verify the audit hash chain and exit")
+
+    ev = sub.add_parser("evidence-pack", help="export an ISO-27001-aligned evidence pack")
+    ev.add_argument("--since", help="period start (ISO timestamp)")
+    ev.add_argument("--until", help="period end (ISO timestamp)")
+    ev.add_argument("--zip", action="store_true", help="write a single .zip instead of a directory")
+
+    pg = sub.add_parser("purge", help="delete local logs/exports/audit state")
+    pg.add_argument("--logs", action="store_true", help="debug logs (default target)")
+    pg.add_argument("--exports", action="store_true", help="exported reports and evidence packs")
+    pg.add_argument("--audit", action="store_true", help="audit log + snapshots (EVIDENCE; needs --yes)")
+    pg.add_argument("--all", action="store_true", help="logs + exports + audit")
+    pg.add_argument("--yes", action="store_true", help="confirm deletion")
+
+    ac = sub.add_parser("actions", help="print the action catalog (registry as data)")
+    ac.add_argument("--json", action="store_true", help="emit JSON")
+
     return parser.parse_args(argv)
 
 
@@ -347,11 +366,37 @@ def build_config_from_args(args: argparse.Namespace) -> AppConfig:
     return config
 
 
-def run(argv: list[str] | None = None) -> None:
+def _dispatch_command(args: argparse.Namespace, config: AppConfig) -> int:
+    """Run a non-TUI subcommand. Returns a process exit code."""
+    from ..services import commands
+
+    if args.command == "verify-audit":
+        return commands.verify_audit(config)
+    if args.command == "evidence-pack":
+        return commands.evidence_pack(config, since=args.since, until=args.until, as_zip=args.zip)
+    if args.command == "purge":
+        want_logs = args.logs or args.all or not (args.exports or args.audit)
+        return commands.purge(
+            config,
+            logs=want_logs,
+            exports=args.exports or args.all,
+            audit=args.audit or args.all,
+            assume_yes=args.yes,
+        )
+    if args.command == "actions":
+        return commands.list_actions(as_json=args.json)
+    raise ValueError(f"Unknown command: {args.command}")
+
+
+def run(argv: list[str] | None = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
     config = build_config_from_args(args)
+    if args.command:
+        config.ensure_dirs()
+        return _dispatch_command(args, config)
     ctx = build_context(config)
     GraphdeckApp(ctx).run()
+    return 0
 
 
 if __name__ == "__main__":

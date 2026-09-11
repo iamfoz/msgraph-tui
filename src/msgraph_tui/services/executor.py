@@ -38,6 +38,18 @@ from ..core.selection import SelectionResult, select_provider
 
 log = logging.getLogger("graphdeck.executor")
 
+# Params that identify the object an action targets, in priority order — used to
+# link audit events to the object they touched.
+_OBJECT_ID_PARAMS = ("user_id", "group_id", "sku_id", "application_id", "device_id")
+
+
+def _object_ref(params: dict[str, Any]) -> str | None:
+    for name in _OBJECT_ID_PARAMS:
+        value = params.get(name)
+        if value:
+            return str(value)
+    return None
+
 
 @dataclass
 class SessionInfo:
@@ -57,6 +69,7 @@ class WritePlan:
     before_state: dict[str, Any] = field(default_factory=dict)
     before_state_error: str | None = None
     snapshot: RollbackSnapshot | None = None
+    before_etag: str | None = None
     requires_reason: bool = False
     confirmation: Confirmation = Confirmation.CONFIRM
     interaction_mode: str = "interactive"
@@ -132,6 +145,8 @@ class Executor:
                 operation_id=envelope.operation_id,
                 provider=envelope.provider,
                 event_type="read",
+                object_id=_object_ref(validated),
+                object_type=action.service,
                 risk=action.risk.value,
                 request_preview=envelope.request_preview,
                 result=envelope.to_audit_dict(),
@@ -178,6 +193,9 @@ class Executor:
             plan.before_state_error = envelope.error_summary() or "before-state capture failed"
             return
         plan.before_state = self._state_from_envelope(envelope, spec.tracked_fields)
+        # Capture the concurrency marker (ETag) so the snapshot records the exact
+        # object version the change was planned against (PRD §17).
+        plan.before_etag = envelope.concurrency_marker
 
     @staticmethod
     def _state_from_envelope(envelope: ResultEnvelope, tracked_fields: list[str]) -> dict[str, Any]:
@@ -233,6 +251,7 @@ class Executor:
             inverse_action_id=inverse_action_id,
             inverse_params=inverse_params,
             inverse_preview=inverse_preview,
+            concurrency_marker=plan.before_etag,
             tracked_fields=list(spec.tracked_fields),
             non_restorable_fields=list(spec.non_restorable_fields),
             risk=plan.action.risk.value,
