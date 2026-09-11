@@ -96,15 +96,40 @@ endpoints you explicitly invoke.
 
 ## Keyboard model
 
-- `Ctrl+P` — command palette (jump to any screen)
+- `Ctrl+P` — command palette: jump to any screen, launch any admin action, or
+  switch the colour theme (dark/light/high-contrast and more)
 - `F1` / `?` — help and safety-model summary
 - `Ctrl+L` — toggle the logs panel
-- `/` — focus the filter box in any table; `Esc`/`Enter` returns to the table
+- `/` — focus the filter box in any table (browse **and** audit/change views);
+  `Esc`/`Enter` returns to the table
 - `Enter` — open detail for the selected row
+- `s` — cycle sort column (asc → desc → next column → unsorted)
+- `g` / `G` — jump to top / bottom
+- `y` / `Y` — copy the current row to the clipboard as JSON / CSV (redacted)
 - `r` refresh · `p` provider/request preview · `Ctrl+E` export
 - Row operations are listed under each table (e.g. in Users: `l` licences,
   `m` memberships, `u` update, `d` enable/disable, `a`/`x` assign/remove
   licence, `k` revoke sessions)
+
+## Command-line subcommands
+
+Beyond launching the TUI, `graphdeck` exposes headless subcommands that reuse
+the same audit/redaction services (exit codes make them scriptable):
+
+```bash
+graphdeck verify-audit                     # verify the hash chain + head anchor (exit 0/1)
+graphdeck evidence-pack --zip              # export an evidence pack (period: --since/--until)
+graphdeck actions --json                   # machine-readable action catalog (registry as data)
+graphdeck purge --logs --yes               # delete debug logs
+graphdeck purge --all --yes                # logs + exports + audit (audit is evidence: needs --yes)
+```
+
+## Tamper-proofing the audit log (optional)
+
+By default the audit chain is tamper-*evident*. To make it unforgeable without
+an operator-held key, point `audit_hmac_key_path` at a key file (stored apart
+from the log). Entries are then HMAC-signed; `graphdeck verify-audit` needs the
+same key to verify. See `docs/security-model.md`.
 
 ## Making a change (what to expect)
 
@@ -149,13 +174,17 @@ original operation.
 | Non-JSON PowerShell output errors | A module wrote noise around the JSON; Graphdeck tolerates leading/trailing noise — see the raw output view for what arrived. |
 | `AUDIT CHAIN BROKEN` | The local audit file was edited or truncated. Preserve the file for investigation; the first divergent entry number is reported. |
 
-## Known limitations (MVP)
+## Known limitations
 
 - Live coverage is Users / Groups / Licences via Graph REST; Exchange, Teams,
   SharePoint, Intune, Roles and Apps modules are designed (see capability
   matrix) but not yet wired to screens.
 - Graph SDK engine is a stub (REST provides the same coverage).
-- No approval workflow yet (approval references can be recorded in reasons).
-- Bulk multi-select operations are not yet exposed in the UI.
-- `$search`-based server-side user search is not used; filtering is
-  client-side over the fetched page set.
+- App-only (client-credentials) auth is not wired yet — sign-in is delegated
+  device-code only.
+- No four-eyes approval workflow yet (approval references *can* be recorded in
+  the change-reason fields and appear in evidence packs).
+- Bulk multi-select operations are not yet exposed in the UI (single-object
+  actions only).
+- Server-side `$search`/`$filter` for large tenants is not wired; table
+  filtering is client-side over the fetched page set.

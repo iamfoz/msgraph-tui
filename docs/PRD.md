@@ -47,7 +47,7 @@ IT/tenant admins (SMB → enterprise), MSP engineers, security & identity engine
 This section is authoritative over any conflicting statement in older docs.
 
 ### 2.1 Implemented and solid
-Action registry with startup validation; 13-step write pipeline (preview → before-state → snapshot → reason → confirm → execute → after-state → hash-chained audit → validation → rollback availability); dry-run recording `change_intent`; append-only hash-chained JSONL audit with `verify()` and tamper/deletion detection; drift-checked rollback executed as a new linked audited change; evidence pack (directory + manifest with SHA-256 hashes); Graph REST engine (injection-safe builder, v1.0/beta, `@odata.nextLink` pagination with cap, `Retry-After` retries for idempotent GETs, error normalisation, ETag capture, Authorization header proven never to leak); PowerShell engine (injection-safe builder, out-of-process, noise-tolerant JSON parse, stderr classification, module detection, never auto-installs); mock engine (mutable fixture tenant, `_simulate` error injection); provider selection with reasons/skipped trail; central redaction on every output path; export (JSON/CSV/MD/TXT); Textual UI (nav tree, dashboard, browse tables, preview/confirm gate, rollback modal, audit/changes views, session screen, logs panel, help, command palette for screens); 108 passing tests.
+Action registry with startup validation; 13-step write pipeline (preview → before-state → snapshot → reason → confirm → execute → after-state → hash-chained audit → validation → rollback availability); dry-run recording `change_intent`; append-only hash-chained JSONL audit with `verify()` and tamper/deletion detection; drift-checked rollback executed as a new linked audited change; evidence pack (directory + manifest with SHA-256 hashes); Graph REST engine (injection-safe builder, v1.0/beta, `@odata.nextLink` pagination with cap, `Retry-After` retries for idempotent GETs, error normalisation, ETag capture, Authorization header proven never to leak); PowerShell engine (injection-safe builder, out-of-process, noise-tolerant JSON parse, stderr classification, module detection, never auto-installs); mock engine (mutable fixture tenant, `_simulate` error injection); provider selection with reasons/skipped trail; central redaction on every output path; export (JSON/CSV/MD/TXT); Textual UI (nav tree, dashboard, browse tables, preview/confirm gate, rollback modal, audit/changes views, session screen, logs panel, help, command palette for screens AND actions); a comprehensive passing test suite.
 
 ### 2.2 Promised in v1 docs but NOT implemented (v2 must close or restate)
 Tracked as `F-FIX-*` and scheduled in Milestone **M4** (§13):
@@ -102,6 +102,17 @@ Each feature lists an ID, a one-line description, the *honest* preferred provide
 ## 4. Epic A — Close the gaps (make v1 true)
 
 Small, high-value, mostly UI/plumbing; unblocks the live product and restores honesty.
+
+> **Delivered on the current branch:** F-FIX-1 (live device-code sign-in wired),
+> F-FIX-2 (embedded `$filter` substitution), F-FIX-3 (column sorting),
+> F-FIX-4 (registry actions in palette + audit/change filter box),
+> F-FIX-5 (ETag → snapshot), F-FIX-6 (evidence-pack `--zip` + period via CLI),
+> F-FIX-7 (full ChangeReason capture), F-FIX-8 (`verify-audit`/`purge` CLI),
+> F-FIX-9 (false `-WhatIf` note fixed), F-FIX-10 (`scc_powershell` registered),
+> F-FIX-12 (debug-log rotation), F-FIX-13 (role-assignable warning in gate),
+> plus the security-audit hardening (audit head anchor, optional HMAC, locking,
+> broadened redaction, endpoint validation). Remaining: F-FIX-11 (derive browse
+> columns from `output_schema`) and app-only auth (F-AUTH-2).
 
 | ID | Feature | Prio | Effort |
 |---|---|---|---|

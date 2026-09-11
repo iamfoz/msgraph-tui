@@ -124,7 +124,7 @@ Rules:
 
 ```bash
 pip install '.[dev]'
-python -m pytest            # 108 tests, no tenant, no PowerShell, no network
+python -m pytest            # full suite; no tenant, no PowerShell, no network
 ```
 
 - Engine tests use `httpx.MockTransport` (Graph) and pure builders (PowerShell).

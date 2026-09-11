@@ -248,4 +248,10 @@ def make_powershell_providers(executable: str | None = None) -> list[PowerShellP
             connect_hint="Connect-SPOService -Url https://<tenant>-admin.sharepoint.com",
             executable=executable,
         ),
+        PowerShellProvider(
+            "scc_powershell", "Security & Compliance PowerShell",
+            modules=["ExchangeOnlineManagement"],  # IPPSSession ships in the EXO module
+            connect_hint="Connect-IPPSSession",
+            executable=executable,
+        ),
     ]

@@ -51,11 +51,21 @@ graphdeck --live
 
 ## Status
 
-MVP: Users, Groups and Licences modules end-to-end (mock + live Graph REST
-code path), PowerShell engine ready for workload modules, audit/rollback/
-evidence complete, 108 tests passing without any tenant. Roadmap and provider
-coverage: [capability matrix](docs/capability-matrix.md), milestones in the
-[PRD](docs/PRD.md).
+Users, Groups and Licences modules end-to-end (mock + live Graph REST with
+working device-code sign-in), PowerShell engine ready for workload modules,
+audit/rollback/evidence complete, and a comprehensive test suite that runs with
+no tenant, network, or PowerShell.
+
+Recent hardening & polish: tamper-evident audit log with a head anchor
+(truncation detection), optional HMAC keying and concurrency locking; broadened
+secret redaction; endpoint validation; headless CLI (`verify-audit`,
+`evidence-pack`, `purge`, `actions`); command-palette action search; column
+sorting, copy-as-JSON/CSV, dashboard posture tiles; role-assignable-group
+warnings and full change-reason capture in the confirmation gate; ruff + mypy
+clean with CI across Linux/macOS/Windows.
+
+Roadmap and provider coverage: [capability matrix](docs/capability-matrix.md),
+milestones in the [PRD](docs/PRD.md).
 
 ## Documentation
 

@@ -65,6 +65,22 @@ async def test_page_cap_truncates_with_warning():
     assert any("truncated" in w.lower() for w in env.warnings)
 
 
+async def test_max_pages_one_stops_after_first_page():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={
+            "value": [{"id": "only"}],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?again=1",
+        })
+
+    env = await _provider(handler, max_pages=1).execute(_action(), {})
+    assert env.success and env.truncated
+    assert env.page_count == 1 and len(calls) == 1  # nextLink not followed
+    assert [r["id"] for r in env.rows] == ["only"]
+
+
 async def test_throttling_retries_with_retry_after():
     attempts = []
 

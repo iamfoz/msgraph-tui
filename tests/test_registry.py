@@ -99,7 +99,14 @@ def test_choice_param_enforced():
 
 def test_shipped_registry_is_valid_and_complete():
     reg = build_registry()
-    assert len(reg) >= 15
+    # concrete core actions exist (robust to adding new ones, unlike a count)
+    expected = {
+        "users.list", "users.get", "users.update", "users.set_account_enabled",
+        "users.assign_license", "users.remove_license",
+        "groups.list", "groups.member_add", "groups.member_remove",
+        "licenses.skus",
+    }
+    assert expected <= {a.id for a in reg.all()}
     # every write action carries the full safety contract
     for action in reg.all():
         if action.is_write:
