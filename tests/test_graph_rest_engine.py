@@ -1,7 +1,6 @@
 """Graph REST engine against a mocked transport: pagination, throttling, errors."""
 
 import httpx
-import pytest
 
 from msgraph_tui.core.actions import ActionDefinition, GraphTemplate, ParamSpec
 from msgraph_tui.core.config import AppConfig, Mode

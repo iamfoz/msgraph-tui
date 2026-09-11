@@ -12,7 +12,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, Static
 
 from ..compliance.audit import ChangeReason
-from ..core.actions import ActionDefinition, Confirmation, ParamSpec, RiskLevel
+from ..core.actions import ActionDefinition, Confirmation, RiskLevel
 from ..core.export import FORMATS
 from ..core.redaction import redact
 from ..services.executor import RollbackPlan, WritePlan
@@ -157,7 +157,7 @@ class PreviewConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
                     f"Typical admin roles: {', '.join(plan.preview.required_roles) or '—'}",
                     f"Rollback support: {action.rollback.level.value}"
                     + (" (snapshot captured)" if plan.snapshot else ""),
-                    f"Audit: hash-chained change record will be written",
+                    "Audit: hash-chained change record will be written",
                 ]
                 if plan.before_state_error:
                     meta.append(

@@ -63,7 +63,7 @@ def select_provider(
             continue
         if name == action.preferred_provider and not reasons:
             reasons.append(f"action's preferred provider ({name}) is available")
-        elif not reasons or reasons[-1].startswith("user preference") is False:
+        elif not reasons or not reasons[-1].startswith("user preference"):
             reasons.append(f"selected {name} (first available supported provider)")
         alternatives = [p for p in action.supported_providers if p != name]
         return SelectionResult(provider, reasons, alternatives, skipped)

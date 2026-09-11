@@ -113,7 +113,7 @@ class PowerShellProvider(Provider):
         if action.ps_module:
             notes.append(f"Requires module: {action.ps_module}")
         if action.powershell and action.powershell.supports_whatif:
-            notes.append("Supports -WhatIf (used automatically in dry-run mode).")
+            notes.append("Supports -WhatIf (declared; dry-run mode uses the mock engine).")
         return OperationPreview(
             provider=self.name,
             summary=command.split(" | ")[0],
@@ -214,7 +214,7 @@ class PowerShellProvider(Provider):
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             raise TimeoutError from None
         return proc.returncode or 0, stdout_b.decode("utf-8", "replace"), stderr_b.decode("utf-8", "replace")

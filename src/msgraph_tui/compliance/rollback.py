@@ -53,8 +53,8 @@ class RollbackSnapshot:
         return redact(dict(self.__dict__))
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RollbackSnapshot":
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+    def from_dict(cls, data: dict[str, Any]) -> RollbackSnapshot:
+        known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 
 

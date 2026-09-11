@@ -30,3 +30,21 @@ msgraph_tui = ["fixtures/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# E501 (line length): long, readable lines are used deliberately here.
+# UP042 (StrEnum): changing (str, Enum) -> StrEnum can alter serialization.
+ignore = ["E501", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B"]  # test helpers use patterns bugbear dislikes but that are fine
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true

@@ -158,10 +158,10 @@ async def test_license_assign_and_rollback(mock_ctx):
     env = await ctx.executor.commit_write(plan, confirmed=True, reason=REASON)
     assert env.success
     lic = await ctx.executor.read("users.licenses", {"user_id": "u-0010"})
-    assert "sku-e3" in {l["skuId"] for l in lic.rows}
+    assert "sku-e3" in {r["skuId"] for r in lic.rows}
 
     rplan = await ctx.executor.plan_rollback(env.rollback_snapshot_id)
     renv = await ctx.executor.commit_rollback(rplan, confirmed=True, reason=REASON)
     assert renv.success
     lic = await ctx.executor.read("users.licenses", {"user_id": "u-0010"})
-    assert "sku-e3" not in {l["skuId"] for l in lic.rows}
+    assert "sku-e3" not in {r["skuId"] for r in lic.rows}

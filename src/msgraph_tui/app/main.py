@@ -123,7 +123,7 @@ DISABLED_LICENSED_SPEC = BrowseSpec(
 class UILogHandler(logging.Handler):
     """Streams redacted debug log lines into the in-app logs panel."""
 
-    def __init__(self, app: "GraphdeckApp") -> None:
+    def __init__(self, app: GraphdeckApp) -> None:
         super().__init__(level=logging.INFO)
         self._app = app
 

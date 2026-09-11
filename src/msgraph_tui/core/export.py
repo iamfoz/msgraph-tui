@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +81,7 @@ def export_rows(
     stem: str,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)
     path = directory / f"{safe_stem}-{stamp}.{fmt}"
     path.write_text(render(rows, fmt), encoding="utf-8")

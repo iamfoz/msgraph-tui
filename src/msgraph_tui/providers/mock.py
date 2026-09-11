@@ -12,8 +12,9 @@ import copy
 import importlib.resources
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ..core.actions import ActionDefinition
 from ..core.envelope import ResultEnvelope, failure, utc_now_iso

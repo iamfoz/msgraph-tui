@@ -1,7 +1,6 @@
 """Security-hardening coverage: redaction gaps, audit integrity, endpoint and
 parameter guards. Complements test_redaction.py / test_audit.py."""
 
-from pathlib import Path
 
 import pytest
 
@@ -9,7 +8,6 @@ from msgraph_tui.compliance.audit import AuditEvent, AuditLog
 from msgraph_tui.core.config import AppConfig
 from msgraph_tui.core.redaction import REDACTED, redact_text
 from msgraph_tui.modules import build_registry
-
 
 # --- redaction: shapes the key=value / key-name rules used to miss ---------
 

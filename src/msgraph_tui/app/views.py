@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -12,8 +13,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
 from ..compliance.evidence import generate_evidence_pack
-from ..core.export import export_rows
 from ..core.errors import GraphdeckError
+from ..core.export import export_rows
 from ..services.context import AppContext
 from .modals import (
     DetailModal,
@@ -22,7 +23,6 @@ from .modals import (
     RollbackModal,
     WriteFormModal,
 )
-
 
 # ---------------------------------------------------------------------------
 # Browse specs — pure data describing each table view

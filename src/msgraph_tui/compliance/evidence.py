@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,7 @@ def generate_evidence_pack(
     period_start: str | None = None,
     period_end: str | None = None,
 ) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     pack_dir = out_dir / f"evidence-pack-{stamp}"
     pack_dir.mkdir(parents=True, exist_ok=True)
 
@@ -87,7 +87,7 @@ def generate_evidence_pack(
     manifest = {
         "tool": "Graphdeck (msgraph-tui)",
         "tool_version": __version__,
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "period_start": period_start,
         "period_end": period_end,
         "total_events_in_period": len(entries),

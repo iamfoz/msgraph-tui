@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from ..core.actions import ActionDefinition
+
 # A template placeholder: {identifier}. Used for both whole-value substitution
 # (the value IS a single placeholder, preserving the param's Python type) and
 # embedded substitution inside a larger string (e.g. an OData $filter).
 _PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-from ..core.actions import ActionDefinition, GraphTemplate
 
 
 @dataclass
