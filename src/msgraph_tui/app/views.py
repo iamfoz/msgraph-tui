@@ -14,7 +14,8 @@ from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
 from ..compliance.evidence import generate_evidence_pack
 from ..core.errors import GraphdeckError
-from ..core.export import export_rows
+from ..core.export import export_rows, render
+from ..core.redaction import redact
 from ..services.context import AppContext
 from .modals import (
     DetailModal,
@@ -68,6 +69,11 @@ class BrowseView(Vertical):
         ("p", "show_preview", "Request preview"),
         ("ctrl+e", "export", "Export"),
         ("slash", "focus_search", "Search"),
+        ("s", "sort_cycle", "Sort"),
+        ("y", "copy_json", "Copy JSON"),
+        ("Y", "copy_csv", "Copy CSV"),
+        ("g", "top", "Top"),
+        ("G", "bottom", "Bottom"),
     ]
 
     def __init__(self, ctx: AppContext, spec: BrowseSpec) -> None:
@@ -76,6 +82,9 @@ class BrowseView(Vertical):
         self.spec = spec
         self._all_rows: list[dict] = []
         self._visible_rows: list[dict] = []
+        self._sort_index: int | None = None
+        self._sort_reverse = False
+        self._provider_label = ""
 
     def compose(self) -> ComposeResult:
         ops = "  ".join(f"[b]{op.key}[/b]:{op.label}" for op in self.spec.row_ops)
@@ -84,7 +93,7 @@ class BrowseView(Vertical):
         table: DataTable = DataTable(id=f"table-{self.spec.id}")
         table.cursor_type = "row"
         yield table
-        hint = "Enter: detail  r: refresh  p: preview  Ctrl+E: export"
+        hint = "Enter: detail  r: refresh  s: sort  y/Y: copy  g/G: top/bottom  Ctrl+E: export"
         if ops:
             hint += "  |  " + ops
         yield Static(hint, classes="hint-line")
@@ -113,13 +122,23 @@ class BrowseView(Vertical):
             self.app.notify(f"{self.spec.list_action} failed", severity="error")
             return
         self._all_rows = envelope.rows
+        self._provider_label = (
+            f"via [b]{envelope.provider}[/b] in {envelope.duration_ms:.0f} ms"
+        )
         for w in envelope.warnings:
             self.app.notify(w, severity="warning")
         self._apply_filter(self.query_one(Input).value)
-        status.update(
-            f"{len(self._all_rows)} rows via [b]{envelope.provider}[/b] "
-            f"in {envelope.duration_ms:.0f} ms"
-        )
+
+    @staticmethod
+    def _sort_value(v: Any):
+        # A total order across mixed/None types, numeric where possible.
+        if isinstance(v, bool):
+            return (0, str(v))
+        if isinstance(v, (int, float)):
+            return (1, float(v))
+        if v is None:
+            return (2, "")
+        return (3, str(v).lower())
 
     def _apply_filter(self, needle: str) -> None:
         needle = needle.strip().lower()
@@ -129,15 +148,75 @@ class BrowseView(Vertical):
                 r for r in rows
                 if any(needle in _fmt(v).lower() for v in r.values())
             ]
+        if self._sort_index is not None:
+            key = self.spec.columns[self._sort_index][0]
+            rows = sorted(rows, key=lambda r: self._sort_value(r.get(key)),
+                          reverse=self._sort_reverse)
         self._visible_rows = rows
         table = self.query_one(DataTable)
         table.clear()
         for i, row in enumerate(rows):
             table.add_row(*[_fmt(row.get(k)) for k, _label in self.spec.columns], key=str(i))
+        self._update_status(needle)
+
+    def _update_status(self, needle: str) -> None:
+        status = self.query_one(f"#status-{self.spec.id}", Static)
+        visible, total = len(self._visible_rows), len(self._all_rows)
+        parts = [f"{visible} of {total} rows" if needle else f"{total} rows"]
+        if self._provider_label:
+            parts.append(self._provider_label)
+        if self._sort_index is not None:
+            arrow = "↓" if self._sort_reverse else "↑"
+            parts.append(f"sorted by {self.spec.columns[self._sort_index][1]} {arrow}")
+        line = " · ".join(parts)
+        if visible == 0:
+            line += (
+                f"  [dim]— nothing matches '{needle}', press Esc to clear[/dim]"
+                if needle else "  [dim]— empty[/dim]"
+            )
+        status.update(line)
 
     @on(Input.Changed)
     def filter_changed(self, event: Input.Changed) -> None:
         self._apply_filter(event.value)
+
+    def action_sort_cycle(self) -> None:
+        """Walk sort states with one key: col0↑ → col0↓ → col1↑ → … → unsorted."""
+        n = len(self.spec.columns)
+        if self._sort_index is None:
+            self._sort_index, self._sort_reverse = 0, False
+        elif not self._sort_reverse:
+            self._sort_reverse = True
+        else:
+            self._sort_index += 1
+            self._sort_reverse = False
+            if self._sort_index >= n:
+                self._sort_index = None
+        self._apply_filter(self.query_one(Input).value)
+
+    def action_copy_json(self) -> None:
+        row = self._current_row()
+        if row is None:
+            self.app.notify("No row selected", severity="warning")
+            return
+        self.app.copy_to_clipboard(json.dumps(redact(row), indent=2, default=str))
+        self.app.notify("Copied row as JSON")
+
+    def action_copy_csv(self) -> None:
+        row = self._current_row()
+        if row is None:
+            self.app.notify("No row selected", severity="warning")
+            return
+        self.app.copy_to_clipboard(render([row], "csv"))
+        self.app.notify("Copied row as CSV")
+
+    def action_top(self) -> None:
+        if self._visible_rows:
+            self.query_one(DataTable).move_cursor(row=0)
+
+    def action_bottom(self) -> None:
+        if self._visible_rows:
+            self.query_one(DataTable).move_cursor(row=len(self._visible_rows) - 1)
 
     def action_focus_search(self) -> None:
         self.query_one(Input).focus()
@@ -210,11 +289,16 @@ class BrowseView(Vertical):
                 subtitle=f"{op.action_id} via {envelope.provider}",
             ))
             return
-        # write flow
+        # write flow — surface the row-level warning (e.g. role-assignable
+        # group) inside the confirmation gate, not just on the detail view.
         prefill = dict(params)
         if op.prefill:
             prefill.update(op.prefill(row))
-        await run_write_flow(self, self.ctx, op.action_id, prefill)
+        warning = self.spec.warning(row) if self.spec.warning else None
+        await run_write_flow(
+            self, self.ctx, op.action_id, prefill,
+            warnings=[warning] if warning else None,
+        )
         self.action_refresh()
 
     # -- preview & export ------------------------------------------------
@@ -254,7 +338,10 @@ class BrowseView(Vertical):
         self.app.notify(f"Exported {len(self._visible_rows)} rows → {path}")
 
 
-async def run_write_flow(view, ctx: AppContext, action_id: str, prefill: dict) -> None:
+async def run_write_flow(
+    view, ctx: AppContext, action_id: str, prefill: dict,
+    warnings: list[str] | None = None,
+) -> None:
     """Shared guided write flow: form → plan → preview/confirm → commit."""
     action = ctx.actions.get(action_id)
     values = await view.app.push_screen_wait(WriteFormModal(action, prefill))
@@ -270,6 +357,7 @@ async def run_write_flow(view, ctx: AppContext, action_id: str, prefill: dict) -
             plan,
             mode_label=ctx.config.mode.value.upper(),
             tenant_label=f"{ctx.session.tenant_name or ctx.session.tenant_id}",
+            warnings=warnings,
         )
     )
     if not confirmed:
@@ -306,6 +394,9 @@ class DashboardView(Vertical):
             yield Static("…", id="dash-users", classes="dash-tile")
             yield Static("…", id="dash-groups", classes="dash-tile")
             yield Static("…", id="dash-skus", classes="dash-tile")
+        with Horizontal(classes="dash-row"):
+            yield Static("…", id="dash-integrity", classes="dash-tile")
+            yield Static("…", id="dash-hygiene", classes="dash-tile")
         yield Static("", id="dash-audit", classes="dash-tile")
         yield Static(
             "[b]Getting around[/b]\n"
@@ -344,6 +435,29 @@ class DashboardView(Vertical):
         self.query_one("#dash-skus", Static).update(
             f"[b]Licence SKUs[/b]\n{await count('licenses.skus')}"
         )
+
+        # Posture tiles: audit-chain integrity + licence hygiene, at a glance.
+        verify = self.ctx.audit_log.verify()
+        integrity_cls = "tile-ok" if verify.ok else "tile-bad"
+        integrity_glyph = "✔ intact" if verify.ok else "✘ BROKEN"
+        integrity = self.query_one("#dash-integrity", Static)
+        integrity.set_classes(f"dash-tile {integrity_cls}")
+        integrity.update(f"[b]Audit chain[/b]\n{integrity_glyph} ({verify.entries} entries)")
+
+        try:
+            hyg = await self.ctx.executor.read("licenses.disabled_with_license", {}, audit=False)
+            stale = len(hyg.rows) if hyg.success else 0
+        except (GraphdeckError, ValueError):
+            stale = 0
+        hyg_cls = "tile-ok" if stale == 0 else "tile-warn"
+        hyg_tile = self.query_one("#dash-hygiene", Static)
+        hyg_tile.set_classes(f"dash-tile {hyg_cls}")
+        hyg_tile.update(
+            "[b]Licence hygiene[/b]\n"
+            + ("✔ no disabled users hold licences" if stale == 0
+               else f"⚠ {stale} disabled user(s) still licensed")
+        )
+
         entries = self.ctx.audit_log.entries()
         recent = entries[-5:][::-1]
         lines = ["[b]Recent activity (local audit log)[/b]"]
@@ -446,6 +560,7 @@ class AuditView(Vertical):
         ("r", "refresh", "Refresh"),
         ("v", "verify", "Verify chain"),
         ("ctrl+e", "export", "Export"),
+        ("slash", "focus_search", "Search"),
     ]
 
     changes_only = False
@@ -458,6 +573,7 @@ class AuditView(Vertical):
     def compose(self) -> ComposeResult:
         title = "Change history & rollback" if self.changes_only else "Audit log (hash-chained)"
         yield Label(title, classes="view-title")
+        yield Input(placeholder="Filter events… ( / )", id="audit-search", classes="search-box")
         table: DataTable = DataTable()
         table.cursor_type = "row"
         yield table
@@ -472,10 +588,23 @@ class AuditView(Vertical):
         table.add_columns("Time (UTC)", "Type", "Action", "Risk", "OK", "Actor", "Object", "Rollback")
         self.action_refresh()
 
+    def action_focus_search(self) -> None:
+        self.query_one("#audit-search", Input).focus()
+
+    @on(Input.Changed, "#audit-search")
+    def _on_filter(self) -> None:
+        self.action_refresh()
+
     def action_refresh(self) -> None:
         entries = [e for e in self.ctx.audit_log.entries() if "_corrupt" not in e]
         if self.changes_only:
             entries = [e for e in entries if e.get("event_type") in ("change", "rollback", "change_intent")]
+        needle = self.query_one("#audit-search", Input).value.strip().lower()
+        if needle:
+            entries = [
+                e for e in entries
+                if needle in json.dumps(e, default=str).lower()
+            ]
         self._entries = entries[::-1]  # newest first
         table = self.query_one(DataTable)
         table.clear()

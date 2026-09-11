@@ -128,11 +128,18 @@ class PreviewConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, plan: WritePlan, mode_label: str, tenant_label: str) -> None:
+    def __init__(
+        self,
+        plan: WritePlan,
+        mode_label: str,
+        tenant_label: str,
+        warnings: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self.plan = plan
         self.mode_label = mode_label
         self.tenant_label = tenant_label
+        self.warnings = warnings or []
 
     def compose(self) -> ComposeResult:
         plan = self.plan
@@ -146,6 +153,8 @@ class PreviewConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
                 classes="modal-subtitle",
             )
             yield Label(f" {risk_text} ", classes=f"risk-badge {risk_class}")
+            for warning in self.warnings:
+                yield Static(f"⚠ {warning}", classes="warning-banner")
             with VerticalScroll():
                 yield Static(
                     "[b]This exact operation will be executed:[/b]\n" + plan.preview.detail,
@@ -173,8 +182,22 @@ class PreviewConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
             if plan.requires_reason:
                 yield Label("Reason for change *", classes="field-label")
                 yield Input(placeholder="Why is this change being made?", id="reason")
-                yield Label("Ticket / change reference", classes="field-label")
-                yield Input(placeholder="e.g. CHG-1234", id="ticket")
+                with Horizontal(classes="reason-row"):
+                    with Vertical():
+                        yield Label("Ticket / change ref", classes="field-label")
+                        yield Input(placeholder="e.g. CHG-1234", id="ticket")
+                    with Vertical():
+                        yield Label("Requestor", classes="field-label")
+                        yield Input(placeholder="who asked for this", id="requestor")
+                with Horizontal(classes="reason-row"):
+                    with Vertical():
+                        yield Label("Approval ref", classes="field-label")
+                        yield Input(placeholder="e.g. APPR-7 (if required)", id="approval")
+                    with Vertical():
+                        yield Label("Expiry (temporary change)", classes="field-label")
+                        yield Input(placeholder="ISO date, if temporary", id="expiry")
+                yield Label("Notes", classes="field-label")
+                yield Input(placeholder="optional notes for the record", id="notes")
 
             if plan.confirmation is Confirmation.TYPED:
                 yield Label(
@@ -201,6 +224,10 @@ class PreviewConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
             reason = ChangeReason(
                 reason=reason_text,
                 ticket=self.query_one("#ticket", Input).value.strip(),
+                requestor=self.query_one("#requestor", Input).value.strip(),
+                approval_ref=self.query_one("#approval", Input).value.strip(),
+                expiry=self.query_one("#expiry", Input).value.strip(),
+                notes=self.query_one("#notes", Input).value.strip(),
             )
         if plan.confirmation is Confirmation.TYPED:
             typed = self.query_one("#typed", Input).value.strip()
@@ -329,10 +356,13 @@ class HelpModal(ModalScreen[None]):
 
   Tables
     ↑/↓ PgUp/PgDn Navigate rows        /        Focus search box
-    Enter         Open detail          Ctrl+E   Export rows
-    r             Refresh              p        Show request preview
+    g / G         Jump top / bottom    Enter    Open detail
+    s             Cycle sort column    Ctrl+E   Export rows
+    y / Y         Copy row JSON / CSV  p        Show request preview
+    r             Refresh
 
-  Row operations are listed in each view's footer.
+  Row operations are listed in each view's footer. Type Ctrl+P to search every
+  screen AND every admin action; Ctrl+P also switches the colour theme.
 
 [b]Safety model[/b]
   Every write shows the exact Graph request / PowerShell command first,

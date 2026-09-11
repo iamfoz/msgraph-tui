@@ -120,6 +120,10 @@ DISABLED_LICENSED_SPEC = BrowseSpec(
 )
 
 
+# Which module view owns each action id prefix (for palette navigation).
+_ACTION_VIEW = {"users": "users", "groups": "groups", "licenses": "skus"}
+
+
 class UILogHandler(logging.Handler):
     """Streams redacted debug log lines into the in-app logs panel."""
 
@@ -194,6 +198,18 @@ class GraphdeckApp(App):
     .risk-low { background: $success-darken-1; }
     .risk-medium { background: $warning-darken-1; color: $text; }
     .risk-high { background: $error-darken-1; }
+
+    .warning-banner {
+        background: $warning-darken-2; color: $text; text-style: bold;
+        padding: 0 1; margin: 0 0 1 0; height: auto;
+    }
+    .reason-row { height: auto; }
+    .reason-row > Vertical { width: 1fr; }
+    .reason-row > Vertical:last-of-type { margin-left: 2; }
+    .empty-state { color: $text-muted; text-style: italic; padding: 1 0; }
+    .tile-ok { color: $success; }
+    .tile-warn { color: $warning; }
+    .tile-bad { color: $error; }
     """
 
     def __init__(self, ctx: AppContext) -> None:
@@ -299,6 +315,23 @@ class GraphdeckApp(App):
         yield SystemCommand("Help: keyboard & safety model", "Open help", self.action_help)
         yield SystemCommand("Toggle logs panel", "Show/hide the debug log stream",
                             self.action_toggle_logs)
+        # Every registry action is searchable from the palette — the expert
+        # path. Selecting one jumps to its module view (where it runs against a
+        # selected row through the full preview/confirm pipeline).
+        for action in sorted(self.ctx.actions.all(), key=lambda a: a.id):
+            view_key = _ACTION_VIEW.get(action.id.split(".")[0])
+            if view_key is None:
+                continue
+            verb = "write" if action.is_write else "read"
+            yield SystemCommand(
+                f"Action: {action.name}  ({action.id})",
+                f"{verb} · {action.service} · risk {action.risk.value} → opens {view_key}",
+                lambda k=view_key, aid=action.id: self._go_to_action(k, aid),
+            )
+
+    def _go_to_action(self, view_key: str, action_id: str) -> None:
+        self.switch_view(view_key)
+        self.notify(f"{action_id}: pick a row and use the listed key to run it.")
 
     # -- actions -----------------------------------------------------------
 
