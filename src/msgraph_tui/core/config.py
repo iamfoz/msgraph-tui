@@ -54,6 +54,13 @@ class AppConfig:
     mode: Mode = Mode.MOCK
     tenant_id: str | None = None
     client_id: str | None = None          # app registration for delegated auth
+    # "delegated" (interactive device-code sign-in) or "app-only" (unattended
+    # client-credential auth via a client certificate). See F-AUTH-2.
+    auth_mode: str = "delegated"
+    # PEM file containing both the certificate and its private key, used for
+    # app-only auth. Never read into this dataclass — see client_certificate().
+    client_certificate_path: Path | None = None
+    client_certificate_thumbprint: str | None = None
     authority: str = "https://login.microsoftonline.com/{tenant}"
     graph_base: str = "https://graph.microsoft.com"
     allow_beta: bool = False
@@ -111,6 +118,21 @@ class AppConfig:
             raise ValueError(f"Audit HMAC key file is empty: {self.audit_hmac_key_path}")
         return key
 
+    def client_certificate(self) -> tuple[str, str] | None:
+        """Read the app-only client certificate (thumbprint, private key PEM).
+
+        Returns None when no certificate is configured. The private key is
+        read from disk on demand and MUST NEVER be stored on this object,
+        logged, previewed, or written to the audit log — treat like
+        audit_hmac_key(). Callers must keep the returned key in memory only.
+        """
+        if self.client_certificate_path is None or not self.client_certificate_thumbprint:
+            return None
+        pem = Path(self.client_certificate_path).expanduser().read_text()
+        if not pem.strip():
+            raise ValueError(f"Client certificate file is empty: {self.client_certificate_path}")
+        return self.client_certificate_thumbprint, pem
+
     def validate_endpoints(self) -> list[str]:
         """Reject non-HTTPS endpoints and warn on non-Microsoft hosts, so a
         planted/typo'd config cannot silently ship bearer tokens off-tenant.
@@ -161,7 +183,10 @@ def load_config(path: Path | None = None) -> AppConfig:
             continue  # forward-compatible: ignore unknown keys
         if key == "mode":
             value = Mode(value)
-        elif key in ("state_dir", "fixtures_dir", "audit_hmac_key_path") and value is not None:
+        elif (
+            key in ("state_dir", "fixtures_dir", "audit_hmac_key_path", "client_certificate_path")
+            and value is not None
+        ):
             value = Path(value).expanduser()
         elif key == "allow_beta" and isinstance(value, str):
             value = value.strip().lower() in ("1", "true", "yes")

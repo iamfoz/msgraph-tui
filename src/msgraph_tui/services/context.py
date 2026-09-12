@@ -17,7 +17,7 @@ from ..core.config import AppConfig, Mode
 from ..core.providers import ProviderRegistry
 from ..core.redaction import redact_text
 from ..modules import build_registry
-from ..providers.graph_rest import GraphRestProvider
+from ..providers.graph_rest import GraphRestProvider, MsalClientCredentialTokenProvider
 from ..providers.graph_sdk import GraphSdkProvider
 from ..providers.mock import MockProvider
 from ..providers.powershell import make_powershell_providers
@@ -76,12 +76,28 @@ def build_context(config: AppConfig) -> AppContext:
 
     mock = MockProvider(fixtures_dir=config.fixtures_dir)
     providers.register(mock)
-    # Token provider is attached later by the Session screen's sign-in flow
-    # (SessionView.sign_in); until then graph_rest reports itself unavailable.
+    # In delegated LIVE mode, the token provider is attached later by the
+    # Session screen's interactive sign-in flow (SessionView.sign_in). In
+    # app-only LIVE mode there is no interactive step to wait for, so we
+    # attach a client-credential token provider here, headlessly. Until
+    # attached (either way), graph_rest reports itself unavailable.
     graph_rest = GraphRestProvider(config)
     providers.register(graph_rest)
+    app_only_provider: MsalClientCredentialTokenProvider | None = None
+    if config.mode is Mode.LIVE and config.auth_mode == "app-only":
+        try:
+            app_only_provider = MsalClientCredentialTokenProvider(config)
+            graph_rest.attach_token_provider(app_only_provider)
+        except Exception as exc:  # missing msal, unreadable/misconfigured cert, etc.
+            logging.getLogger("graphdeck.context").warning(
+                "App-only auth not attached: %s", redact_text(str(exc))
+            )
     providers.register(GraphSdkProvider())
-    for ps in make_powershell_providers(config.powershell_executable):
+    # In live mode, workload providers share one persistent PowerShell host so a
+    # single Connect-ExchangeOnline/Teams/SPO/SCC is reused across commands.
+    for ps in make_powershell_providers(
+        config.powershell_executable, persistent=config.mode is Mode.LIVE
+    ):
         providers.register(ps)
 
     if config.mode in (Mode.MOCK, Mode.DRY_RUN):
@@ -91,6 +107,14 @@ def build_context(config: AppConfig) -> AppContext:
             tenant_id=org["id"],
             tenant_name=org["displayName"],
             auth_mode="mock" if config.mode is Mode.MOCK else "dry-run (mock data)",
+        )
+    elif app_only_provider is not None:
+        # app-only auth was attached headlessly above; no interactive sign-in.
+        session = SessionInfo(
+            actor=app_only_provider.account_label(),
+            tenant_id=config.tenant_id or "unknown-tenant",
+            tenant_name="",
+            auth_mode="app-only",
         )
     else:
         session = SessionInfo(

@@ -77,6 +77,54 @@ class MsalDeviceCodeTokenProvider:
         return claims.get("preferred_username", "signed-in user")
 
 
+class MsalClientCredentialTokenProvider:
+    """Unattended app-only auth via OAuth 2.0 client credentials + certificate
+    (requires `msal`). No interactive step: suitable for headless/CLI/scheduled
+    runs. Tokens (and the private key used to acquire them) live in memory
+    only — never logged, previewed or audited."""
+
+    def __init__(self, config: AppConfig) -> None:
+        try:
+            import msal  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "App-only mode needs the optional 'msal' dependency: "
+                "pip install 'msgraph-tui[live]'"
+            ) from exc
+        import msal
+
+        if not config.client_id or not config.tenant_id:
+            raise RuntimeError("Set tenant_id and client_id in the config file for app-only mode.")
+        cert = config.client_certificate()
+        if cert is None:
+            raise RuntimeError(
+                "App-only mode needs client_certificate_path and "
+                "client_certificate_thumbprint set in the config file."
+            )
+        thumbprint, private_key = cert
+        self._config = config
+        self._client_id = config.client_id
+        self._app = msal.ConfidentialClientApplication(
+            config.client_id,
+            authority=config.authority.format(tenant=config.tenant_id),
+            client_credential={"thumbprint": thumbprint, "private_key": private_key},
+        )
+        del private_key  # not retained beyond building the MSAL app
+
+    def get_token(self) -> str:
+        scopes = ["https://graph.microsoft.com/.default"]
+        silent = self._app.acquire_token_silent(scopes, account=None)
+        if silent and "access_token" in silent:
+            return silent["access_token"]
+        result = self._app.acquire_token_for_client(scopes=scopes)
+        if "access_token" not in result:
+            raise RuntimeError(f"App-only auth failed: {result.get('error_description', 'unknown')}")
+        return result["access_token"]
+
+    def account_label(self) -> str:
+        return f"app {self._client_id} (app-only)"
+
+
 def normalize_graph_error(status: int, payload: Any, correlation_id: str | None) -> NormalizedError:
     code, message = None, f"Graph request failed with HTTP {status}"
     if isinstance(payload, dict):
