@@ -174,17 +174,33 @@ original operation.
 | Non-JSON PowerShell output errors | A module wrote noise around the JSON; Graphdeck tolerates leading/trailing noise — see the raw output view for what arrived. |
 | `AUDIT CHAIN BROKEN` | The local audit file was edited or truncated. Preserve the file for investigation; the first divergent entry number is reported. |
 
+## Recent additions
+
+- **App-only (certificate) auth** for unattended/headless runs: set
+  `auth_mode: "app-only"`, `client_certificate_path`, and
+  `client_certificate_thumbprint` (plus tenant/client id) in the config and
+  live mode authenticates automatically — no interactive sign-in.
+- **Bulk multi-select**: `Space` to select rows (`Ctrl+A` all, `Ctrl+D` clear),
+  then a write key applies to the whole selection through a bulk wizard with a
+  typed `VERB n` confirmation. Each object gets its own audited change and
+  rollback snapshot.
+- **Exchange Online module** (Exchange → Mailbox list): mailboxes, mailbox
+  permissions, inbox rules (a BEC/forwarding hunt surface), and set/clear
+  forwarding (high-risk, typed confirm, full rollback). Runs on the persistent
+  PowerShell host in live mode (one `Connect-ExchangeOnline` reused across
+  commands) and on fixtures offline. Live Exchange needs `pwsh` +
+  `ExchangeOnlineManagement` + a tenant.
+
 ## Known limitations
 
-- Live coverage is Users / Groups / Licences via Graph REST; Exchange, Teams,
-  SharePoint, Intune, Roles and Apps modules are designed (see capability
-  matrix) but not yet wired to screens.
+- Live coverage today: Users / Groups / Licences via Graph REST and Exchange
+  mailboxes via workload PowerShell. Teams, SharePoint, Intune, Roles and Apps
+  modules remain designed (see capability matrix) — not yet wired to screens.
 - Graph SDK engine is a stub (REST provides the same coverage).
-- App-only (client-credentials) auth is not wired yet — sign-in is delegated
-  device-code only.
 - No four-eyes approval workflow yet (approval references *can* be recorded in
   the change-reason fields and appear in evidence packs).
-- Bulk multi-select operations are not yet exposed in the UI (single-object
-  actions only).
 - Server-side `$search`/`$filter` for large tenants is not wired; table
   filtering is client-side over the fetched page set.
+- Workload PowerShell (Exchange etc.) has been validated against fixtures and a
+  fake host transport, not a live tenant — the persistent host's real `pwsh`
+  behaviour still needs tenant validation.
