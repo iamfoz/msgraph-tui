@@ -55,9 +55,9 @@ Legend: ✅ full support · ⚠️ partial · ❌ not practical · 🔶 stub/des
 | Preferred | **exchange_powershell** |
 | Safest | exchange_powershell with `-WhatIf` + Graphdeck snapshot |
 | App-only | ✅ (certificate-based app-only supported by the module) |
-| Rollback | ✅ partial/full via before-state capture of permission/forwarding values |
-| Implemented | 🔶 engine ready (PowerShell provider + module detection); actions designed for M4 |
-| Limitations | module ~1 GB memory in long sessions; REST-backed cmdlets require PS 7 recommended |
+| Rollback | ✅ full via before-state capture of forwarding values (set_forwarding); permission-change rollback designed |
+| Implemented | ✅ **Exchange module shipped**: list/get mailboxes, mailbox permissions, inbox rules (BEC hunt), and set/clear forwarding (HIGH-risk, typed confirm, FULL rollback) — over the persistent PowerShell host in live mode, and the mock engine offline. Retention/quotas/transport still designed. |
+| Limitations | module ~1 GB memory in long sessions; live validation needs a tenant + pwsh (the persistent host reuses one Connect-ExchangeOnline across commands) |
 
 ## Teams
 

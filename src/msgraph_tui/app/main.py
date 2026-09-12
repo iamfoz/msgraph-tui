@@ -120,8 +120,35 @@ DISABLED_LICENSED_SPEC = BrowseSpec(
 )
 
 
+MAILBOXES_SPEC = BrowseSpec(
+    id="mailboxes",
+    title="Mailboxes — Exchange Online",
+    list_action="exchange.mailboxes.list",
+    columns=[
+        ("displayName", "Name"),
+        ("primarySmtpAddress", "Primary SMTP"),
+        ("recipientTypeDetails", "Type"),
+        ("forwardingSmtpAddress", "Forwarding"),
+        ("litigationHoldEnabled", "Litigation hold"),
+    ],
+    detail_action="exchange.mailbox.get",
+    detail_param="mailbox_id",
+    row_ops=[
+        RowOp("e", "Permissions", "exchange.mailbox_permissions", "table", {"mailbox_id": "id"}),
+        RowOp("i", "Inbox rules", "exchange.inbox_rules", "table", {"mailbox_id": "id"}),
+        RowOp("f", "Set/clear forwarding", "exchange.set_forwarding", "write", {"mailbox_id": "id"}),
+    ],
+    warning=lambda row: (
+        "⚠ EXTERNAL FORWARDING SET — verify this is legitimate (BEC persistence vector)."
+        if row.get("forwardingSmtpAddress") else None
+    ),
+)
+
+
 # Which module view owns each action id prefix (for palette navigation).
-_ACTION_VIEW = {"users": "users", "groups": "groups", "licenses": "skus"}
+_ACTION_VIEW = {
+    "users": "users", "groups": "groups", "licenses": "skus", "exchange": "mailboxes",
+}
 
 
 class UILogHandler(logging.Handler):
@@ -234,6 +261,8 @@ class GraphdeckApp(App):
                 lic = tree.root.add("🎫 Licences", expand=True)
                 lic.add_leaf("Subscribed SKUs", data="skus")
                 lic.add_leaf("Disabled users w/ licences", data="disabled-licensed")
+                exo = tree.root.add("📧 Exchange", expand=True)
+                exo.add_leaf("Mailboxes", data="mailboxes")
                 comp = tree.root.add("🧾 Compliance", expand=True)
                 comp.add_leaf("Audit log", data="audit")
                 comp.add_leaf("Change history & rollback", data="changes")
@@ -274,6 +303,7 @@ class GraphdeckApp(App):
             "groups": lambda: BrowseView(ctx, GROUPS_SPEC),
             "skus": lambda: BrowseView(ctx, SKUS_SPEC),
             "disabled-licensed": lambda: BrowseView(ctx, DISABLED_LICENSED_SPEC),
+            "mailboxes": lambda: BrowseView(ctx, MAILBOXES_SPEC),
             "audit": lambda: AuditView(ctx),
             "changes": lambda: ChangesView(ctx),
         }
@@ -284,7 +314,7 @@ class GraphdeckApp(App):
         view_id = {
             "dashboard": "view-dashboard", "session": "view-session",
             "users": "view-users", "groups": "view-groups", "skus": "view-skus",
-            "disabled-licensed": "view-disabled-licensed",
+            "disabled-licensed": "view-disabled-licensed", "mailboxes": "view-mailboxes",
             "audit": "view-audit", "changes": "view-changes",
         }[key]
         if key not in self._views:

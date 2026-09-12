@@ -1,0 +1,9 @@
+{
+  "u-0003": [
+    {"name": "auto-forward-invoices", "enabled": true, "forwardTo": "external.actor@fabrikam.example", "deleteMessage": false, "moveToFolder": null, "stopProcessingRules": true},
+    {"name": "hide-security-alerts", "enabled": true, "forwardTo": null, "deleteMessage": true, "moveToFolder": "RSS Feeds", "subjectContainsWords": "security alert;password;sign-in"}
+  ],
+  "u-0001": [
+    {"name": "newsletter-to-folder", "enabled": true, "forwardTo": null, "deleteMessage": false, "moveToFolder": "Newsletters", "subjectContainsWords": null}
+  ]
+}

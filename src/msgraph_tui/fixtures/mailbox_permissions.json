@@ -1,0 +1,12 @@
+{
+  "shared-helpdesk": [
+    {"user": "grace.hopper@contoso.example", "accessRights": "FullAccess", "isInherited": false},
+    {"user": "ada.lovelace@contoso.example", "accessRights": "FullAccess", "isInherited": false}
+  ],
+  "u-0001": [
+    {"user": "NT AUTHORITY\\SELF", "accessRights": "FullAccess", "isInherited": false}
+  ],
+  "room-boardroom": [
+    {"user": "helpdesk@contoso.example", "accessRights": "FullAccess", "isInherited": false}
+  ]
+}

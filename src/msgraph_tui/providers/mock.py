@@ -72,6 +72,9 @@ class MockTenant:
         self.memberships: dict[str, dict] = _load_fixture("memberships", fixtures_dir)
         self.skus: list[dict] = _load_fixture("skus", fixtures_dir)
         self.organization: dict = _load_fixture("organization", fixtures_dir)
+        self.mailboxes: list[dict] = _load_fixture("mailboxes", fixtures_dir)
+        self.mailbox_permissions: dict[str, list] = _load_fixture("mailbox_permissions", fixtures_dir)
+        self.inbox_rules: dict[str, list] = _load_fixture("inbox_rules", fixtures_dir)
 
     def user(self, user_id: str) -> dict | None:
         return next(
@@ -82,6 +85,16 @@ class MockTenant:
 
     def group(self, group_id: str) -> dict | None:
         return next((g for g in self.groups if g["id"] == group_id), None)
+
+    def mailbox(self, mailbox_id: str) -> dict | None:
+        key = str(mailbox_id).lower()
+        return next(
+            (m for m in self.mailboxes
+             if m["id"].lower() == key
+             or str(m.get("userPrincipalName", "")).lower() == key
+             or str(m.get("primarySmtpAddress", "")).lower() == key),
+            None,
+        )
 
     def sku(self, sku_id: str) -> dict | None:
         return next(
@@ -126,6 +139,11 @@ class MockProvider(Provider):
             "licenses.skus": self._skus,
             "licenses.users_by_sku": self._users_by_sku,
             "licenses.disabled_with_license": self._disabled_with_license,
+            "exchange.mailboxes.list": self._mailboxes_list,
+            "exchange.mailbox.get": self._mailbox_get,
+            "exchange.mailbox_permissions": self._mailbox_permissions,
+            "exchange.inbox_rules": self._inbox_rules,
+            "exchange.set_forwarding": self._set_forwarding,
             "session.organization": lambda p: dict(self.tenant.organization),
         }
 
@@ -410,6 +428,41 @@ class MockProvider(Provider):
                 )
                 out.append(row)
         return out
+
+    # -- Exchange Online -----------------------------------------------
+
+    def _require_mailbox(self, p: dict) -> dict:
+        mbx = self.tenant.mailbox(p.get("mailbox_id", ""))
+        if mbx is None:
+            raise _MockError(NormalizedError(
+                ErrorCategory.NOT_FOUND, f"Mailbox {p.get('mailbox_id')!r} not found", status=404,
+            ))
+        return mbx
+
+    def _mailboxes_list(self, p: dict) -> list[dict]:
+        rows = self.tenant.mailboxes
+        search = p.get("search")
+        if search:
+            rows = [m for m in rows if _match(
+                m, search, ("displayName", "userPrincipalName", "primarySmtpAddress"))]
+        return [dict(m) for m in rows]
+
+    def _mailbox_get(self, p: dict) -> dict:
+        return dict(self._require_mailbox(p))
+
+    def _mailbox_permissions(self, p: dict) -> list[dict]:
+        mbx = self._require_mailbox(p)
+        return list(self.tenant.mailbox_permissions.get(mbx["id"], []))
+
+    def _inbox_rules(self, p: dict) -> list[dict]:
+        mbx = self._require_mailbox(p)
+        return list(self.tenant.inbox_rules.get(mbx["id"], []))
+
+    def _set_forwarding(self, p: dict) -> dict:
+        mbx = self._require_mailbox(p)
+        mbx["forwardingSmtpAddress"] = p.get("forwarding_address") or None
+        mbx["deliverToMailboxAndForward"] = bool(p.get("deliver_and_forward"))
+        return dict(mbx)
 
 
 class _MockError(Exception):

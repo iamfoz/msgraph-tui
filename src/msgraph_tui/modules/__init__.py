@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from ..core.actions import ActionRegistry
-from . import groups, licenses, users
+from . import exchange, groups, licenses, users
 
 
 def build_registry() -> ActionRegistry:
     registry = ActionRegistry()
-    for module in (users, groups, licenses):
+    for module in (users, groups, licenses, exchange):
         module.register(registry)
     return registry
