@@ -15,7 +15,7 @@ from ..compliance.audit import ChangeReason
 from ..core.actions import ActionDefinition, Confirmation, RiskLevel
 from ..core.export import FORMATS
 from ..core.redaction import redact
-from ..services.executor import RollbackPlan, WritePlan
+from ..services.executor import BulkPlan, RollbackPlan, WritePlan
 
 RISK_LABEL = {
     RiskLevel.READ_ONLY: ("READ-ONLY", "risk-read"),
@@ -64,10 +64,22 @@ class WriteFormModal(ModalScreen[dict | None]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, action: ActionDefinition, prefill: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        action: ActionDefinition,
+        prefill: dict[str, Any] | None = None,
+        *,
+        omit: set[str] | None = None,
+        validate: bool = True,
+    ) -> None:
         super().__init__()
         self.action = action
         self.prefill = prefill or {}
+        self.omit = omit or set()      # params not to render (e.g. per-object id in bulk)
+        self.validate = validate       # False -> return raw values (bulk shared params)
+
+    def _fields(self):
+        return [s for s in self.action.params if s.name not in self.omit]
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
@@ -76,7 +88,7 @@ class WriteFormModal(ModalScreen[dict | None]):
             risk_text, risk_class = RISK_LABEL[self.action.risk]
             yield Label(f" {risk_text} ", classes=f"risk-badge {risk_class}")
             with VerticalScroll(id="form-fields"):
-                for spec in self.action.params:
+                for spec in self._fields():
                     yield Label(
                         f"{spec.name}{' *' if spec.required else ''}"
                         + (f" — {spec.description}" if spec.description else ""),
@@ -99,7 +111,7 @@ class WriteFormModal(ModalScreen[dict | None]):
 
     def _collect(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
-        for spec in self.action.params:
+        for spec in self._fields():
             widget = self.query_one(f"#field-{spec.name}")
             if isinstance(widget, Checkbox):
                 values[spec.name] = widget.value
@@ -107,7 +119,9 @@ class WriteFormModal(ModalScreen[dict | None]):
                 raw = widget.value.strip()
                 if raw != "":
                     values[spec.name] = raw
-        return self.action.validate_params(values)
+        # Bulk shared-param collection skips validation (the per-object id param
+        # is supplied per row and validated when each item is planned).
+        return self.action.validate_params(values) if self.validate else values
 
     @on(Button.Pressed, "#submit")
     def submit(self) -> None:
@@ -241,6 +255,78 @@ class PreviewConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
         self.dismiss((False, None))
 
 
+class BulkConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
+    """Bulk safety gate: shows the operation, the exact object set, a sample
+    request, and requires a typed 'VERB n' phrase (bulk is always high-friction),
+    plus a change reason. Each object still gets its own snapshot + audit event."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, plan: BulkPlan, mode_label: str, tenant_label: str) -> None:
+        super().__init__()
+        self.plan = plan
+        self.mode_label = mode_label
+        self.tenant_label = tenant_label
+
+    def compose(self) -> ComposeResult:
+        plan = self.plan
+        risk_text, risk_class = RISK_LABEL[plan.action.risk]
+        sample = plan.plans[0].preview.detail if plan.plans else ""
+        with Vertical(classes="modal-box modal-wide"):
+            yield Label(f"Bulk: {plan.action.name} — {plan.count} objects", classes="modal-title")
+            yield Label(
+                f"Tenant: {self.tenant_label}   Mode: {self.mode_label}",
+                classes="modal-subtitle",
+            )
+            yield Label(f" {risk_text} · BULK ({plan.count}) ", classes=f"risk-badge {risk_class}")
+            yield Static(
+                f"⚠ This applies to {plan.count} objects, each as its own audited change "
+                "with an individual rollback snapshot.",
+                classes="warning-banner",
+            )
+            with VerticalScroll():
+                yield Static("[b]Target objects:[/b] " + ", ".join(plan.object_ids), classes="meta-block")
+                yield Static(
+                    "[b]Sample operation (object 1 of "
+                    f"{plan.count}):[/b]\n" + sample,
+                    classes="preview-block",
+                )
+            if plan.requires_reason:
+                yield Label("Reason for change *", classes="field-label")
+                yield Input(placeholder="Why is this bulk change being made?", id="reason")
+                yield Label("Ticket / change reference", classes="field-label")
+                yield Input(placeholder="e.g. CHG-1234", id="ticket")
+            yield Label(f"Type [b]{plan.typed_phrase}[/b] to enable execution:", classes="field-label")
+            yield Input(placeholder=plan.typed_phrase, id="typed")
+            yield Static("", id="confirm-error", classes="error-text")
+            with Horizontal(classes="modal-buttons"):
+                yield Button(f"Execute ({plan.count})", id="execute", variant="error")
+                yield Button("Cancel (Esc)", id="cancel")
+
+    @on(Button.Pressed, "#execute")
+    def execute(self) -> None:
+        error = self.query_one("#confirm-error", Static)
+        reason = None
+        if self.plan.requires_reason:
+            reason_text = self.query_one("#reason", Input).value.strip()
+            if not reason_text:
+                error.update("A change reason is required by policy.")
+                return
+            reason = ChangeReason(
+                reason=reason_text,
+                ticket=self.query_one("#ticket", Input).value.strip(),
+            )
+        typed = self.query_one("#typed", Input).value.strip()
+        if typed != self.plan.typed_phrase:
+            error.update(f"Confirmation text does not match {self.plan.typed_phrase!r}.")
+            return
+        self.dismiss((True, reason))
+
+    @on(Button.Pressed, "#cancel")
+    def action_cancel(self) -> None:
+        self.dismiss((False, None))
+
+
 class RollbackModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
     """Rollback gate: original change, before/current diff, sanity checks."""
 
@@ -360,6 +446,13 @@ class HelpModal(ModalScreen[None]):
     s             Cycle sort column    Ctrl+E   Export rows
     y / Y         Copy row JSON / CSV  p        Show request preview
     r             Refresh
+
+  Multi-select (bulk)
+    Space         Toggle row selection   Ctrl+A  Select all visible
+    Ctrl+D        Clear selection
+    With rows selected, pressing a write key (e.g. d disable, x remove licence)
+    applies it to the WHOLE selection — one wizard, a typed 'VERB n' confirm,
+    and a separate audited change + rollback snapshot per object.
 
   Row operations are listed in each view's footer. Type Ctrl+P to search every
   screen AND every admin action; Ctrl+P also switches the colour theme.

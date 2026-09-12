@@ -19,6 +19,7 @@ from ..core.export import export_rows, render
 from ..core.redaction import redact
 from ..services.context import AppContext
 from .modals import (
+    BulkConfirmModal,
     DetailModal,
     ExportModal,
     PreviewConfirmModal,
@@ -75,6 +76,9 @@ class BrowseView(Vertical):
         ("Y", "copy_csv", "Copy CSV"),
         ("g", "top", "Top"),
         ("G", "bottom", "Bottom"),
+        ("space", "toggle_select", "Select"),
+        ("ctrl+a", "select_all", "Select all"),
+        ("ctrl+d", "clear_select", "Clear selection"),
     ]
 
     def __init__(self, ctx: AppContext, spec: BrowseSpec) -> None:
@@ -86,6 +90,7 @@ class BrowseView(Vertical):
         self._sort_index: int | None = None
         self._sort_reverse = False
         self._provider_label = ""
+        self._selected_ids: set[str] = set()
 
     def compose(self) -> ComposeResult:
         ops = "  ".join(f"[b]{op.key}[/b]:{op.label}" for op in self.spec.row_ops)
@@ -157,8 +162,15 @@ class BrowseView(Vertical):
         table = self.query_one(DataTable)
         table.clear()
         for i, row in enumerate(rows):
-            table.add_row(*[_fmt(row.get(k)) for k, _label in self.spec.columns], key=str(i))
+            cells = [_fmt(row.get(k)) for k, _label in self.spec.columns]
+            if cells and self._row_id(row) in self._selected_ids:
+                cells[0] = "▸ " + cells[0]  # selection marker (keeps columns aligned)
+            table.add_row(*cells, key=str(i))
         self._update_status(needle)
+
+    @staticmethod
+    def _row_id(row: dict) -> str:
+        return str(row.get("id") or row.get("skuId") or "")
 
     def _update_status(self, needle: str) -> None:
         status = self.query_one(f"#status-{self.spec.id}", Static)
@@ -169,6 +181,8 @@ class BrowseView(Vertical):
         if self._sort_index is not None:
             arrow = "↓" if self._sort_reverse else "↑"
             parts.append(f"sorted by {self.spec.columns[self._sort_index][1]} {arrow}")
+        if self._selected_ids:
+            parts.append(f"[b]{len(self._selected_ids)} selected[/b] (a write key acts on all)")
         line = " · ".join(parts)
         if visible == 0:
             line += (
@@ -218,6 +232,33 @@ class BrowseView(Vertical):
     def action_bottom(self) -> None:
         if self._visible_rows:
             self.query_one(DataTable).move_cursor(row=len(self._visible_rows) - 1)
+
+    # -- multi-select --------------------------------------------------
+
+    def action_toggle_select(self) -> None:
+        row = self._current_row()
+        if row is None:
+            return
+        rid = self._row_id(row)
+        if not rid:
+            return
+        self._selected_ids.symmetric_difference_update({rid})
+        cursor = self.query_one(DataTable).cursor_row
+        self._apply_filter(self.query_one(Input).value)
+        if cursor is not None:
+            self.query_one(DataTable).move_cursor(row=cursor)
+
+    def action_select_all(self) -> None:
+        self._selected_ids = {self._row_id(r) for r in self._visible_rows if self._row_id(r)}
+        self._apply_filter(self.query_one(Input).value)
+
+    def action_clear_select(self) -> None:
+        if self._selected_ids:
+            self._selected_ids.clear()
+            self._apply_filter(self.query_one(Input).value)
+
+    def _selected_rows(self) -> list[dict]:
+        return [r for r in self._all_rows if self._row_id(r) in self._selected_ids]
 
     def action_focus_search(self) -> None:
         self.query_one(Input).focus()
@@ -289,6 +330,11 @@ class BrowseView(Vertical):
                 envelope.data,
                 subtitle=f"{op.action_id} via {envelope.provider}",
             ))
+            return
+        # If rows are selected, a write key acts on the whole selection.
+        if self._selected_ids:
+            await run_bulk_flow(self, self.ctx, op, self._selected_rows())
+            self.action_refresh()
             return
         # write flow — surface the row-level warning (e.g. role-assignable
         # group) inside the confirmation gate, not just on the detail view.
@@ -377,6 +423,57 @@ async def run_write_flow(
             severity="error",
             timeout=10,
         )
+
+
+async def run_bulk_flow(view, ctx: AppContext, op, rows: list[dict]) -> None:
+    """Bulk write flow: collect shared params once, plan one WritePlan per
+    selected object (each with its own snapshot), confirm with a typed phrase,
+    execute, and report per-object results."""
+    action = ctx.actions.get(op.action_id)
+    id_params = set(op.params_from_row.keys())
+    shared = await view.app.push_screen_wait(
+        WriteFormModal(action, omit=id_params, validate=False)
+    )
+    if shared is None:
+        return
+    items = []
+    for row in rows:
+        item = {p: row.get(col) for p, col in op.params_from_row.items()}
+        if op.prefill:
+            item.update(op.prefill(row))
+        item.update(shared)
+        items.append(item)
+    try:
+        plan = await ctx.executor.plan_bulk(op.action_id, items)
+    except (GraphdeckError, ValueError) as exc:
+        view.app.notify(f"Cannot plan bulk {op.action_id}: {exc}", severity="error")
+        return
+    confirmed, reason = await view.app.push_screen_wait(
+        BulkConfirmModal(
+            plan,
+            ctx.config.mode.value.upper(),
+            ctx.session.tenant_name or ctx.session.tenant_id,
+        )
+    )
+    if not confirmed:
+        view.app.notify("Bulk cancelled — nothing was executed.", severity="warning")
+        return
+    results = await ctx.executor.commit_bulk(plan, confirmed=True, reason=reason)
+    ok = sum(1 for r in results if r.success)
+    failed = [r for r in results if not r.success]
+    view.app.notify(
+        f"{action.name}: {ok}/{len(results)} succeeded"
+        + (f", {len(failed)} failed" if failed else "."),
+        severity="warning" if failed else "information",
+    )
+    if failed:
+        await view.app.push_screen_wait(DetailModal(
+            f"Bulk {action.name}: {len(failed)} failure(s)",
+            {"failed": [
+                {"object_id": r.object_id, "error": r.envelope.error_summary()} for r in failed
+            ]},
+        ))
+    view._selected_ids.clear()
 
 
 # ---------------------------------------------------------------------------

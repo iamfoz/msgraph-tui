@@ -93,6 +93,41 @@ class RollbackPlan:
     write_plan: WritePlan | None  # None when rollback is blocked
 
 
+@dataclass
+class BulkItemResult:
+    object_id: str
+    success: bool
+    envelope: ResultEnvelope
+
+
+@dataclass
+class BulkPlan:
+    """A bulk change: one fully-formed WritePlan per target object, each with
+    its own before-state and rollback snapshot (preserving the per-object
+    rollback guarantee the PRD requires for bulk actions)."""
+
+    action: ActionDefinition
+    plans: list[WritePlan]
+    requires_reason: bool = False
+
+    @property
+    def count(self) -> int:
+        return len(self.plans)
+
+    @property
+    def typed_phrase(self) -> str:
+        verb = self.action.id.split(".")[-1].upper().replace("_", " ")
+        return f"{verb} {self.count}"
+
+    @property
+    def object_ids(self) -> list[str]:
+        return [
+            str(p.params.get("user_id") or p.params.get("group_id")
+                or (p.snapshot.object_id if p.snapshot else "?"))
+            for p in self.plans
+        ]
+
+
 class Executor:
     def __init__(
         self,
@@ -320,6 +355,46 @@ class Executor:
         log.info("write %s via %s -> success=%s op=%s",
                  plan.action.id, envelope.provider, envelope.success, plan.operation_id)
         return envelope
+
+    # ------------------------------------------------------------------
+    # Bulk pipeline (PRD W2 / F-UX-1): each object gets its own full plan,
+    # snapshot and audit event, so per-object rollback still holds.
+    # ------------------------------------------------------------------
+
+    async def plan_bulk(
+        self,
+        action_id: str,
+        items: list[dict[str, Any]],
+    ) -> BulkPlan:
+        action = self.actions.get(action_id)
+        if not action.is_write:
+            raise PipelineError(f"{action_id} is read-only; bulk applies to write actions")
+        if not items:
+            raise PipelineError("Bulk plan requires at least one target object")
+        plans = [
+            await self.plan_write(action_id, item, interaction_mode="bulk")
+            for item in items
+        ]
+        return BulkPlan(action=action, plans=plans, requires_reason=self.config.require_change_reason)
+
+    async def commit_bulk(
+        self,
+        plan: BulkPlan,
+        *,
+        confirmed: bool,
+        reason: ChangeReason | None = None,
+    ) -> list[BulkItemResult]:
+        if not confirmed:
+            raise PipelineError("Bulk write refused: confirmation not given")
+        if plan.requires_reason and (reason is None or not reason.reason.strip()):
+            raise PipelineError("Bulk write refused: change reason required by policy")
+        results: list[BulkItemResult] = []
+        for wp, object_id in zip(plan.plans, plan.object_ids, strict=True):
+            envelope = await self.commit_write(wp, confirmed=True, reason=reason)
+            results.append(BulkItemResult(object_id, envelope.success, envelope))
+        succeeded = sum(1 for r in results if r.success)
+        log.info("bulk %s -> %d/%d succeeded", plan.action.id, succeeded, len(results))
+        return results
 
     def _audit_write(
         self,
