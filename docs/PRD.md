@@ -225,16 +225,15 @@ Graph-only where Graph suffices; workload PowerShell where it is the only suppor
 
 ## 8. Epic E — Governance, compliance & change control
 
-> **Delivered:** F-COMP-1 (file channel). Opt-in per risk level
+> **Delivered:** F-COMP-1 in full. Opt-in per risk level
 > (`require_approval_for_risk`). A change request is bound to a SHA-256 content
-> hash of action + parameters + tenant; the approver must differ from both the
-> requester and the executor; bulk runs need one approval covering every
-> object; rollbacks are exempt; applied requests cannot be replayed; all
-> decisions are audited. **Deviation from the spec:** approvals are signed with
-> an optional *shared* HMAC key rather than per-approver Ed25519 keys, so the
-> signature proves the approval was made by a key-holder and not tampered with,
-> but it is not per-person non-repudiation. Ed25519 and the git/PR and webhook
-> channels remain open.
+> hash of action + parameters + tenant, re-derived before signing; the approver
+> must differ from both the requester and the executor; bulk runs need one
+> approval covering every object; rollbacks are exempt; applied requests cannot
+> be replayed; all decisions are audited. Signing: per-approver Ed25519 keys
+> checked against an organisation trust store (`graphdeck keygen`), with a
+> shared HMAC key as a lighter option. Channels: local files, offline
+> export/sign/import, git branches reviewed as PRs, and webhook notifications.
 
 | ID | Feature | Provider | Prio |
 |---|---|---|---|

@@ -13,11 +13,17 @@ splits those across two people:
    edited request invalidates it), be an ``approve`` decision, and come from
    someone other than the requester and the executor (segregation of duties).
 
-Optional HMAC signing (``approval_signing_key_path``) makes approval files
-tamper-evident. Honest limitation: an HMAC key is shared, so it proves that
-*someone holding the key* approved — it is a process control and evidence trail,
-not non-repudiation against a requester who also holds the key. Per-approver
-asymmetric keys are the future enhancement.
+Signing, strongest first:
+
+- **Ed25519 per approver** (``approver_trust_store_path``): each approver signs
+  with their own private key; the approval verifies only against a public key
+  registered to that approver in the trust store. This binds the approval to a
+  person, and signed approval files can travel over any channel (git branch,
+  email, chat) and be imported safely. See :mod:`.signing`.
+- **Shared HMAC** (``approval_signing_key_path``): tamper-evident, but proves
+  only that *someone holding the key* approved — a process control, not
+  non-repudiation.
+- Unsigned: typed identities only.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from ..core.actions import RESERVED_PARAMS, ActionDefinition
 from ..core.envelope import utc_now_iso
 from ..core.redaction import redact
 from .audit import canonical_json
+from .signing import ED25519, HMAC_SHA256, ApproverKey, TrustStore, verify_signature
 
 PENDING, APPROVED, REJECTED, APPLIED = "pending", "approved", "rejected", "applied"
 
@@ -58,6 +65,20 @@ def bulk_content_hash(action_id: str, items: list[dict[str, Any]], tenant_id: st
 def _sign(key: bytes, content_hash: str, approver: str, decision: str) -> str:
     message = f"{content_hash}|{approver}|{decision}".encode()
     return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def _ed25519_message(approval: Approval) -> bytes:
+    """Everything an Ed25519 approval vouches for, canonically encoded."""
+    return canonical_json({
+        "v": 1,
+        "request_id": approval.request_id,
+        "content_hash": approval.content_hash,
+        "approver": approval.approver,
+        "decision": approval.decision,
+        "comment": approval.comment,
+        "signed_at": approval.signed_at,
+        "key_id": approval.key_id,
+    }).encode("utf-8")
 
 
 @dataclass
@@ -98,10 +119,19 @@ class Approval:
     comment: str = ""
     signature: str | None = None
     signed_at: str = field(default_factory=utc_now_iso)
+    signature_alg: str | None = None  # "ed25519" | "hmac-sha256" | None (unsigned)
+    key_id: str | None = None         # Ed25519 public-key fingerprint
 
     @property
     def approved(self) -> bool:
         return self.decision == "approve"
+
+    @property
+    def algorithm(self) -> str | None:
+        """Signature algorithm; approvals from before per-approver keys are HMAC."""
+        if not self.signature:
+            return None
+        return self.signature_alg or HMAC_SHA256
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -129,6 +159,26 @@ def assert_requestable(action: ActionDefinition, params: dict[str, Any]) -> None
         )
 
 
+def expected_content_hash(request: ChangeRequest) -> str:
+    """Recompute the hash from the request's own action/params/tenant."""
+    if request.is_bulk:
+        return bulk_content_hash(request.action_id, request.bulk_items, request.tenant_id)
+    return content_hash_for(request.action_id, request.params, request.tenant_id)
+
+
+def check_request_integrity(request: ChangeRequest) -> None:
+    """Refuse a request whose stated hash doesn't match its parameters.
+
+    An approver reviews the params, but signs the *hash*. A request file edited
+    to show harmless params next to the hash of a harmful change would trick
+    them into approving the harmful one, so the hash is always re-derived."""
+    if expected_content_hash(request) != request.content_hash:
+        raise ValueError(
+            f"Change request {request.request_id} is inconsistent: its content hash does not "
+            "match its parameters (edited or corrupted). Do not approve it."
+        )
+
+
 def make_approval(
     request: ChangeRequest,
     approver: str,
@@ -136,21 +186,56 @@ def make_approval(
     approve: bool,
     comment: str = "",
     key: bytes | None = None,
+    private_key: ApproverKey | None = None,
 ) -> Approval:
     if not approver.strip():
         raise ValueError("An approver identity is required.")
     if approver.strip().lower() == request.requester.strip().lower():
         raise ValueError("Segregation of duties: the requester cannot approve their own change.")
-    decision = "approve" if approve else "reject"
-    signature = _sign(key, request.content_hash, approver, decision) if key else None
-    return Approval(
+    check_request_integrity(request)
+    approval = Approval(
         request_id=request.request_id,
         content_hash=request.content_hash,
         approver=approver.strip(),
-        decision=decision,
+        decision="approve" if approve else "reject",
         comment=comment,
-        signature=signature,
     )
+    if private_key is not None:
+        approval.signature_alg = ED25519
+        approval.key_id = private_key.key_id
+        approval.signature = private_key.sign(_ed25519_message(approval))
+    elif key:
+        approval.signature_alg = HMAC_SHA256
+        approval.signature = _sign(key, approval.content_hash, approval.approver, approval.decision)
+    return approval
+
+
+def verify_signature_only(
+    approval: Approval, *, key: bytes | None = None, trust_store: TrustStore | None = None
+) -> tuple[bool, str]:
+    """Check just the signature against the configured policy.
+
+    A trust store demands an Ed25519 signature from a key registered to the
+    named approver; otherwise an HMAC key demands a valid HMAC; with neither,
+    unsigned approvals are accepted."""
+    if trust_store is not None:
+        if approval.algorithm != ED25519:
+            return False, "approval is not signed with a personal (Ed25519) approver key"
+        public = trust_store.find_key(approval.approver, approval.key_id)
+        if public is None:
+            return False, (f"key {approval.key_id} is not registered to {approval.approver} "
+                           "in the approver trust store")
+        if not verify_signature(public, _ed25519_message(approval), approval.signature or ""):
+            return False, "approval signature is invalid (tampered or wrong key)"
+        return True, f"signed by {approval.approver} (key {approval.key_id})"
+    if key is not None:
+        if approval.algorithm != HMAC_SHA256:
+            return False, "approval is unsigned but a signing key is configured"
+        expected = _sign(key, approval.content_hash, approval.approver, approval.decision)
+        if not hmac.compare_digest(expected, approval.signature or ""):
+            return False, "approval signature is invalid (tampered or wrong key)"
+        return True, "HMAC signature valid"
+    return True, "unsigned"
 
 
 def verify_approval(
@@ -160,6 +245,7 @@ def verify_approval(
     requester: str,
     executor: str,
     key: bytes | None = None,
+    trust_store: TrustStore | None = None,
 ) -> tuple[bool, str]:
     """Check an approval authorises this exact change. Returns (ok, reason)."""
     if approval is None:
@@ -171,12 +257,9 @@ def verify_approval(
     approver = approval.approver.strip().lower()
     if approver in (requester.strip().lower(), executor.strip().lower()):
         return False, "segregation of duties: approver must differ from requester and executor"
-    if key is not None:
-        if not approval.signature:
-            return False, "approval is unsigned but a signing key is configured"
-        expected = _sign(key, approval.content_hash, approval.approver, approval.decision)
-        if not hmac.compare_digest(expected, approval.signature):
-            return False, "approval signature is invalid (tampered or wrong key)"
+    ok, why = verify_signature_only(approval, key=key, trust_store=trust_store)
+    if not ok:
+        return False, why
     return True, f"approved by {approval.approver}"
 
 

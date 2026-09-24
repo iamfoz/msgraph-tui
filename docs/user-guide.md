@@ -15,6 +15,7 @@ Requirements:
 # from a clone of this repository
 pip install .            # core (mock + dry-run modes work immediately)
 pip install '.[live]'    # adds msal for live Microsoft Graph authentication
+pip install '.[signing]' # adds cryptography for personal (Ed25519) approver keys
 pip install '.[dev]'     # adds pytest for running the test suite
 ```
 
@@ -163,10 +164,83 @@ Rules enforced by the Executor:
 - Dry-run mode is not gated because nothing executes.
 
 Requests and approvals are JSON files under `<state>/approvals/`; every
-request, decision and execution is written to the audit log. With
-`approval_signing_key_path` set, approvals are HMAC-signed and unsigned or
-altered approvals are refused. See `docs/security-model.md` for what that
-does and doesn't prove.
+request, decision and execution is written to the audit log.
+
+### Personal approver keys (recommended)
+
+Without keys, an approval is just a name someone typed. With personal
+Ed25519 keys, an approval only counts if it was signed by a key registered to
+that approver, so nobody can approve in a colleague's name. Needs
+`pip install '.[signing]'`.
+
+1. Each approver creates a key on their own machine:
+   `graphdeck keygen --as bob@contoso.example`. It asks for a passphrase and
+   writes the private key with owner-only permissions. It prints the public key
+   and a snippet for the trust store. The private key never leaves that machine.
+2. Whoever owns the process keeps a **trust store** file listing approvers and
+   their public keys:
+   `{"approvers": {"bob@contoso.example": ["<public key>"]}}`. Store it where
+   requesters can't edit it, because anyone who can add a key to it can approve.
+3. Everyone sets `approver_trust_store_path` to that file. Approvers also set
+   `approver_key_path` (or `GRAPHDECK_APPROVER_KEY`) to their own key, or pass
+   `--key`. For scripts, `GRAPHDECK_APPROVER_KEY_PASSPHRASE` avoids the prompt.
+
+Once a trust store is configured, approvals that are unsigned, HMAC-signed,
+signed by an unregistered key, or edited after signing are all refused.
+`approval_signing_key_path` (one shared HMAC key) still works when no trust
+store is set, but it only proves that *someone* holding the key approved.
+
+### Approving from another machine
+
+The approver doesn't need tenant access or a copy of your state directory:
+
+```bash
+graphdeck approval-export 3f9c1a2b7d4e --out req.json          # requester
+graphdeck approve --request-file req.json --as bob@contoso.example --out approval.json   # approver
+graphdeck approval-import approval.json                          # requester
+graphdeck apply 3f9c1a2b7d4e
+```
+
+Send the files any way you like (email, chat, ticket). The approver sees the
+exact parameters the approval covers. A request file edited to show different
+parameters from the ones its hash covers is refused before anything is signed.
+Only signed approvals can be imported, and each one is checked against the
+trust store (or HMAC key) and against the request it claims to approve.
+
+### Reviewing requests as git pull requests
+
+Point Graphdeck at a local clone of a shared repository:
+
+```json
+{ "approval_channel": "git", "approval_git_repo": "~/src/m365-approvals",
+  "approval_git_remote": "origin", "approval_git_base_branch": "main" }
+```
+
+- Submitting a request pushes a branch `graphdeck/cr-<id>` containing
+  `change-requests/<id>/request.json`. Graphdeck prints a link for opening a
+  PR, so the change can be discussed and reviewed like code.
+- `graphdeck approve <id> --as <name>` fetches the request from the repo if it
+  isn't local and pushes the signed decision (`approval.json`) to the same
+  branch.
+- `graphdeck apply <id>` and `graphdeck approvals --sync` pull decisions from
+  the repo and verify them before accepting them.
+- Graphdeck only uses git plumbing and never checks out branches or touches
+  your working tree. It commits with the clone's own git identity.
+- If the push fails (e.g. offline), the request is still saved locally and you
+  get a warning. Use the export/import commands above as a fallback.
+
+Being able to push to the repo is not enough to approve: when a trust store is
+configured, the decision must still carry a valid personal signature.
+
+### Webhook notifications
+
+Set `approval_webhook_url` (or `GRAPHDECK_APPROVAL_WEBHOOK_URL`) to a Teams,
+Slack or other incoming webhook. It is notified when a request is submitted,
+approved, rejected, or applied. Messages carry the request id, action, risk,
+requester, reason, and the commands to run. They leave out parameters and
+previews, which can contain personal data. The URL must be https. It usually
+embeds a token, so treat it as a secret: only its host is ever logged. A
+failed notification never blocks a request.
 
 ## Tamper-proofing the audit log (optional)
 
@@ -253,9 +327,11 @@ original operation.
   workload PowerShell. Intune, Roles and Apps modules remain designed (see
   capability matrix).
 - Graph SDK engine is a stub (REST provides the same coverage).
-- Four-eyes approvals use typed identities and an optional shared signing key,
-  not per-person cryptographic signatures, and requests travel as local files
-  only (no git/PR or webhook channel yet).
+- Four-eyes identities are only as strong as your configuration: without a
+  trust store they are typed names. Graphdeck doesn't open the pull request
+  for you (it pushes the branch and prints the link), and it can't stop anyone
+  merging or closing that PR; the PR is for discussion, and the signed
+  `approval.json` is what counts.
 - Server-side `$search`/`$filter` for large tenants is not wired; table
   filtering is client-side over the fetched page set.
 - Workload PowerShell (Exchange, Teams, SharePoint, Purview) has been validated against fixtures and a

@@ -54,8 +54,8 @@ graphdeck --live
 Users, Groups and Licences modules end-to-end (mock + live Graph REST with
 device-code or certificate app-only sign-in); Exchange, Teams, SharePoint and
 Purview (read-only) modules on a persistent PowerShell host; bulk multi-select
-changes; an optional four-eyes approval gate (`graphdeck approvals / approve /
-apply`); audit/rollback/evidence complete; and a test suite that runs with no
+changes; an optional four-eyes approval gate with personal Ed25519 approver keys,
+offline signing, git/PR review and webhook notifications; audit/rollback/evidence complete; and a test suite that runs with no
 tenant, network, or PowerShell. The workload PowerShell modules are tested
 against fixtures and a fake host, not yet a live tenant.
 

@@ -16,13 +16,18 @@ from typing import Any
 
 from ..compliance.approval import (
     APPLIED,
+    APPROVED,
+    PENDING,
+    REJECTED,
     Approval,
     ApprovalStore,
     ChangeRequest,
     assert_requestable,
     bulk_content_hash,
+    check_request_integrity,
     content_hash_for,
     verify_approval,
+    verify_signature_only,
 )
 from ..compliance.audit import AuditEvent, AuditLog, ChangeReason
 from ..compliance.rollback import (
@@ -155,6 +160,9 @@ class Executor:
         self.rollback_store = rollback_store
         self.session = session
         self._approvals: ApprovalStore | None = None
+        # Human-readable notes from the last channel publish (git push / webhook),
+        # surfaced by the UI/CLI. Channel failures never block a change request.
+        self.last_channel_notes: list[str] = []
 
     # ------------------------------------------------------------------
     # Four-eyes approval (F-COMP-1)
@@ -190,6 +198,7 @@ class Executor:
         )
         self.approvals.save_request(request)
         self._audit_approval_event("approval_requested", request, detail={"status": "pending"})
+        self._publish_request(request)
         return request
 
     def create_bulk_change_request(
@@ -212,6 +221,7 @@ class Executor:
         )
         self.approvals.save_request(request)
         self._audit_approval_event("approval_requested", request, detail={"objects": len(items)})
+        self._publish_request(request)
         return request
 
     def find_approval(self, plan: WritePlan) -> tuple[ChangeRequest, Approval] | None:
@@ -220,13 +230,115 @@ class Executor:
 
     def record_approval(self, request: ChangeRequest, approval: Approval) -> None:
         self.approvals.save_approval(approval)
-        self.approvals.set_status(request.request_id, "approved" if approval.approved else "rejected")
+        self.approvals.set_status(request.request_id, APPROVED if approval.approved else REJECTED)
         self._audit_approval_event(
             "approval_granted" if approval.approved else "approval_rejected",
             request,
             detail={"approver": approval.approver, "signed": bool(approval.signature),
+                    "signature_alg": approval.algorithm, "key_id": approval.key_id,
                     "comment": approval.comment},
         )
+        self._notify("approval_granted" if approval.approved else "approval_rejected",
+                     request, approval)
+
+    def import_approval(self, approval: Approval) -> ChangeRequest:
+        """Accept a signed approval that arrived from elsewhere (file, git, chat).
+
+        Only *signed* approvals can be imported — an unsigned file from an
+        untrusted channel would let anyone type a colleague's name. The request
+        must be pending here, the approval must match its exact content, and
+        the approver must differ from the requester. Raises ValueError."""
+        request = self.approvals.load_request(approval.request_id)
+        if request is None:
+            raise ValueError(f"No local change request {approval.request_id!r} for this approval.")
+        if request.status != PENDING:
+            raise ValueError(f"Request {request.request_id} is already {request.status}.")
+        check_request_integrity(request)
+        if approval.content_hash != request.content_hash:
+            raise ValueError("Approval does not match this exact change (content hash differs).")
+        if approval.approver.strip().lower() == request.requester.strip().lower():
+            raise ValueError("Segregation of duties: the requester cannot approve their own change.")
+        if not approval.signature:
+            raise ValueError("Refusing an unsigned approval from outside this workstation; "
+                             "the approver must sign it (approver key or signing key).")
+        ok, why = verify_signature_only(
+            approval,
+            key=self.config.approval_signing_key(),
+            trust_store=self.config.approval_trust_store(),
+        )
+        if not ok:
+            raise ValueError(f"Approval rejected: {why}.")
+        if why == "unsigned":  # signed, but nothing configured to check it against
+            raise ValueError("Cannot verify the approval: configure approver_trust_store_path "
+                             "(or approval_signing_key_path) before importing approvals.")
+        self.record_approval(request, approval)
+        return request
+
+    def _mark_applied(self, request_id: str) -> None:
+        self.approvals.set_status(request_id, APPLIED)
+        request = self.approvals.load_request(request_id)
+        if request is not None:
+            self._notify("change_applied", request, self.approvals.load_approval(request_id))
+
+    # -- channels ---------------------------------------------------------
+
+    def approval_channel(self) -> Any | None:
+        """The git channel when configured, else None (local files only)."""
+        if self.config.approval_channel != "git" or self.config.approval_git_repo is None:
+            return None
+        from ..compliance.channels import GitApprovalChannel
+
+        return GitApprovalChannel(
+            self.config.approval_git_repo,
+            remote=self.config.approval_git_remote,
+            base_branch=self.config.approval_git_base_branch,
+        )
+
+    def _notify(self, event: str, request: ChangeRequest, approval: Approval | None = None) -> None:
+        if not self.config.approval_webhook_url:
+            return
+        from ..compliance.channels import WebhookNotifier
+
+        try:
+            sent = WebhookNotifier(self.config.approval_webhook_url).notify(event, request, approval)
+        except ValueError as exc:  # invalid URL in config
+            self.last_channel_notes.append(f"Webhook not sent: {exc}")
+            return
+        if not sent:
+            self.last_channel_notes.append("Webhook notification failed (see debug log).")
+
+    def _publish_request(self, request: ChangeRequest) -> None:
+        self.last_channel_notes = []
+        channel = self.approval_channel()
+        if channel is not None:
+            from ..compliance.channels import GitChannelError
+
+            try:
+                channel.publish_request(request)
+                self.last_channel_notes.append(channel.compare_hint(request.request_id))
+            except GitChannelError as exc:
+                self.last_channel_notes.append(
+                    f"Saved locally but NOT pushed to the approvals repo: {exc}"
+                )
+        self._notify("approval_requested", request)
+
+    def sync_approval(self, request_id: str) -> str | None:
+        """Pull a decision for a pending request from the git channel.
+
+        Returns a note describing what happened, or None when there is no
+        channel / no decision yet. Imported approvals are fully verified."""
+        channel = self.approval_channel()
+        request = self.approvals.load_request(request_id)
+        if channel is None or request is None or request.status != PENDING:
+            return None
+        approval = channel.fetch_approval(request_id)
+        if approval is None:
+            return None
+        try:
+            self.import_approval(approval)
+        except ValueError as exc:
+            return f"{request_id}: decision found but refused — {exc}"
+        return f"{request_id}: {approval.decision} by {approval.approver} imported"
 
     def _check_approval(
         self, *, content_hash: str, approval: Approval | None, request_id: str | None
@@ -243,6 +355,7 @@ class Executor:
             requester=requester,
             executor=self.session.actor,
             key=self.config.approval_signing_key(),
+            trust_store=self.config.approval_trust_store(),
         )
         if not ok:
             raise PipelineError(
@@ -252,7 +365,8 @@ class Executor:
             )
         assert approval is not None
         return {"request_id": approval.request_id, "approver": approval.approver,
-                "requester": requester, "signed": bool(approval.signature)}
+                "requester": requester, "signed": bool(approval.signature),
+                "signature_alg": approval.algorithm, "key_id": approval.key_id}
 
     def _audit_approval_event(self, event_type: str, request: ChangeRequest, *, detail: dict) -> None:
         self.audit_log.append(AuditEvent(
@@ -488,7 +602,7 @@ class Executor:
             if reason is not None and not reason.approval_ref:
                 reason = replace(reason, approval_ref=four_eyes["request_id"])
             if envelope.success and _preapproved is None:
-                self.approvals.set_status(four_eyes["request_id"], APPLIED)
+                self._mark_applied(four_eyes["request_id"])
         self._audit_write(
             plan, envelope, reason,
             event_type=event_type,
@@ -558,7 +672,7 @@ class Executor:
             )
             results.append(BulkItemResult(object_id, envelope.success, envelope))
         if preapproved is not None:
-            self.approvals.set_status(preapproved["request_id"], APPLIED)
+            self._mark_applied(preapproved["request_id"])
         succeeded = sum(1 for r in results if r.success)
         log.info("bulk %s -> %d/%d succeeded", plan.action.id, succeeded, len(results))
         return results

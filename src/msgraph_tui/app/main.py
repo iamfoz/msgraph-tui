@@ -517,12 +517,28 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
     ap = sub.add_parser("approvals", help="list four-eyes change requests")
     ap.add_argument("--all", action="store_true", help="include approved/rejected/applied")
+    ap.add_argument("--sync", action="store_true", help="pull decisions from the approvals git repo")
 
     av = sub.add_parser("approve", help="approve/reject a change request (as a different person)")
-    av.add_argument("request_id")
+    av.add_argument("request_id", nargs="?", help="request id (omit with --request-file)")
     av.add_argument("--as", dest="approver", required=True, help="approver identity")
     av.add_argument("--reject", action="store_true", help="reject instead of approve")
     av.add_argument("--comment", default="", help="optional review comment")
+    av.add_argument("--key", type=Path, help="your Ed25519 approver key (default: approver_key_path)")
+    av.add_argument("--request-file", type=Path, help="sign offline from an exported request file")
+    av.add_argument("--out", type=Path, help="with --request-file: write the signed approval here")
+
+    kg = sub.add_parser("keygen", help="create your personal Ed25519 approver key")
+    kg.add_argument("--as", dest="identity", required=True, help="your approver identity")
+    kg.add_argument("--out", type=Path, help="where to write the private key")
+    kg.add_argument("--no-passphrase", action="store_true", help="store the key unencrypted")
+
+    ae = sub.add_parser("approval-export", help="export a change request for offline approval")
+    ae.add_argument("request_id")
+    ae.add_argument("--out", type=Path, help="file to write (default: stdout)")
+
+    ai = sub.add_parser("approval-import", help="import a signed approval file")
+    ai.add_argument("path", type=Path)
 
     aa = sub.add_parser("apply", help="execute an approved change request")
     aa.add_argument("request_id")
@@ -564,11 +580,23 @@ def _dispatch_command(args: argparse.Namespace, config: AppConfig) -> int:
     if args.command == "actions":
         return commands.list_actions(as_json=args.json)
     if args.command == "approvals":
-        return commands.list_approvals(config, show_all=args.all)
+        return commands.list_approvals(config, show_all=args.all, sync=args.sync)
     if args.command == "approve":
+        if not args.request_id and not args.request_file:
+            print("approve needs a request id or --request-file.", file=sys.stderr)
+            return 2
         return commands.approve(
-            config, args.request_id, args.approver, reject=args.reject, comment=args.comment
+            config, args.request_id, args.approver, reject=args.reject, comment=args.comment,
+            key_path=args.key, request_file=args.request_file, out_file=args.out,
         )
+    if args.command == "keygen":
+        return commands.keygen(
+            config, args.identity, out_path=args.out, passphrase=not args.no_passphrase
+        )
+    if args.command == "approval-export":
+        return commands.export_request(config, args.request_id, out_file=args.out)
+    if args.command == "approval-import":
+        return commands.import_approval(config, args.path)
     if args.command == "apply":
         return commands.apply_request(config, args.request_id)
     raise ValueError(f"Unknown command: {args.command}")

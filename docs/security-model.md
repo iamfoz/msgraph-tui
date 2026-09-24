@@ -83,16 +83,32 @@
   values rendered into command strings (e.g. a PowerShell `-Password 'x'`).
   It is deny-list + pattern based; a genuinely novel secret shape in free text
   could still slip through, so treat exports as sensitive regardless.
-- Four-eyes identities are the names people type (`--as bob`) plus the
-  signed-in account, not verified credentials. The optional
-  `approval_signing_key_path` HMAC proves an approval was produced by someone
-  holding the shared key and was not altered afterwards; it does **not** prove
-  *which* key-holder made it. Treat four-eyes as a process control that makes
-  bypassing review deliberate and visible in the audit trail, not as
-  cryptographic non-repudiation. Anyone who can write to the state directory
-  and holds the key could forge an approval, so keep the key apart from
-  operators' workstations where segregation of duties matters. Rollbacks are
-  deliberately exempt from the gate.
+- Four-eyes strength depends on configuration:
+  - **No keys:** identities are the names people type (`--as bob`) plus the
+    signed-in account. It's a process control that makes bypassing review
+    deliberate and visible in the audit trail.
+  - **Shared HMAC key** (`approval_signing_key_path`): approvals are
+    tamper-evident, but the signature proves only that *someone* holding the
+    key approved, not who.
+  - **Personal Ed25519 keys + trust store** (`approver_trust_store_path`): an
+    approval verifies only against a public key registered to the named
+    approver. Forging Bob's approval needs Bob's private key (0600,
+    optionally passphrase-encrypted, never copied into Graphdeck state).
+  - **What remains trusted:** the trust store itself. Anyone who can add a key
+    to it can approve, so keep it under change control that requesters can't
+    edit. Identity in the trust store is whatever the maintainer wrote, not an
+    Entra ID check. A requester with admin rights in the tenant can still make
+    the change outside Graphdeck: four-eyes governs this tool, not the tenant.
+  - The approver signs the request's *content hash*. Graphdeck re-derives that
+    hash from the request's parameters before showing or signing it, so a
+    request file doctored to look harmless is refused.
+  - Signed approvals from outside the workstation (import, git) are always
+    verified; unsigned ones are refused.
+  - The git channel adds transport, not trust. Push access to the approvals
+    repo cannot approve anything when a trust store is configured.
+  - Webhook URLs embed tokens: only the host is logged, and notifications
+    carry no parameters or previews.
+  - Rollbacks are deliberately exempt from the gate.
 - PowerShell module output is parsed defensively but modules execute with
   full user privileges — install modules only from trusted sources
   (Graphdeck never installs them for you).

@@ -385,6 +385,13 @@ class BrowseView(Vertical):
         self.app.notify(f"Exported {len(self._visible_rows)} rows → {path}")
 
 
+def _notify_channel(view, ctx: AppContext) -> None:
+    """Show where the request went (PR link) or why it didn't get there."""
+    for note in ctx.executor.last_channel_notes:
+        failed = "NOT pushed" in note or "not sent" in note or "failed" in note
+        view.app.notify(note, severity="warning" if failed else "information", timeout=25)
+
+
 async def run_write_flow(
     view, ctx: AppContext, action_id: str, prefill: dict,
     warnings: list[str] | None = None,
@@ -440,6 +447,7 @@ async def run_write_flow(
             f"here, or: graphdeck apply {request.request_id}",
             timeout=25,
         )
+        _notify_channel(view, ctx)
         return
     try:
         envelope = await ctx.executor.commit_write(
@@ -523,6 +531,7 @@ async def run_bulk_flow(view, ctx: AppContext, op, rows: list[dict]) -> None:
             f"<name>; then graphdeck apply {request.request_id}",
             timeout=25,
         )
+        _notify_channel(view, ctx)
         view._selected_ids.clear()
         return
     try:

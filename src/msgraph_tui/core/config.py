@@ -14,8 +14,11 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from ..compliance.signing import TrustStore
 
 log = logging.getLogger("graphdeck.config")
 
@@ -91,6 +94,20 @@ class AppConfig:
     require_approval_for_risk: list[str] = field(default_factory=list)
     # Optional key file used to HMAC-sign approvals (tamper-evident approvals).
     approval_signing_key_path: Path | None = None
+    # Per-approver Ed25519 signing. The trust store maps approver identities to
+    # public keys; when set, every approval must be signed by a registered key.
+    approver_trust_store_path: Path | None = None
+    # This operator's own private key, used when *they* approve something.
+    approver_key_path: Path | None = None
+    # Where change requests travel: "file" (local state dir only) or "git"
+    # (pushed as a branch to a shared repo so they can be reviewed as a PR).
+    approval_channel: str = "file"
+    approval_git_repo: Path | None = None       # local clone of the shared repo
+    approval_git_remote: str = "origin"
+    approval_git_base_branch: str = "main"
+    # Optional incoming-webhook URL (Teams/Slack/...) notified of requests and
+    # decisions. Treat as a secret: it usually embeds a token.
+    approval_webhook_url: str | None = None
 
     @property
     def audit_dir(self) -> Path:
@@ -130,6 +147,14 @@ class AppConfig:
         if not key:
             raise ValueError(f"Approval signing key file is empty: {self.approval_signing_key_path}")
         return key
+
+    def approval_trust_store(self) -> TrustStore | None:
+        """Load the approver trust store, if configured."""
+        if self.approver_trust_store_path is None:
+            return None
+        from ..compliance.signing import TrustStore
+
+        return TrustStore.load(self.approver_trust_store_path)
 
     def provider_preference_for(self, action_id: str, service: str) -> str | None:
         return self.provider_preferences.get(action_id) or self.provider_preferences.get(service)
@@ -188,13 +213,18 @@ _ENV_MAP = {
     "GRAPHDECK_ALLOW_BETA": "allow_beta",
     "GRAPHDECK_AUTH_MODE": "auth_mode",                     # delegated | app-only
     "GRAPHDECK_REQUIRE_APPROVAL": "require_approval_for_risk",  # e.g. "high,destructive"
+    "GRAPHDECK_APPROVER_KEY": "approver_key_path",
+    "GRAPHDECK_APPROVER_TRUST_STORE": "approver_trust_store_path",
+    "GRAPHDECK_APPROVAL_WEBHOOK_URL": "approval_webhook_url",
 }
 
 _PATH_KEYS = (
     "state_dir", "fixtures_dir", "audit_hmac_key_path",
     "client_certificate_path", "approval_signing_key_path",
+    "approver_trust_store_path", "approver_key_path", "approval_git_repo",
 )
 _AUTH_MODES = ("delegated", "app-only")
+_APPROVAL_CHANNELS = ("file", "git")
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -226,7 +256,15 @@ def load_config(path: Path | None = None) -> AppConfig:
             value = str(value).strip().lower()
             if value not in _AUTH_MODES:
                 raise ValueError(f"auth_mode must be one of {_AUTH_MODES}, got {value!r}")
+        elif key == "approval_channel":
+            value = str(value).strip().lower()
+            if value not in _APPROVAL_CHANNELS:
+                raise ValueError(
+                    f"approval_channel must be one of {_APPROVAL_CHANNELS}, got {value!r}"
+                )
         setattr(cfg, key, value)
+    if cfg.approval_channel == "git" and cfg.approval_git_repo is None:
+        raise ValueError("approval_channel 'git' needs approval_git_repo (a local clone).")
     for warning in cfg.validate_endpoints():
         log.warning("%s", warning)
     return cfg
