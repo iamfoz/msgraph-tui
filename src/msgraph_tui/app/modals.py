@@ -262,11 +262,18 @@ class BulkConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, plan: BulkPlan, mode_label: str, tenant_label: str) -> None:
+    def __init__(
+        self,
+        plan: BulkPlan,
+        mode_label: str,
+        tenant_label: str,
+        warnings: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self.plan = plan
         self.mode_label = mode_label
         self.tenant_label = tenant_label
+        self.warnings = warnings or []
 
     def compose(self) -> ComposeResult:
         plan = self.plan
@@ -279,6 +286,8 @@ class BulkConfirmModal(ModalScreen["tuple[bool, ChangeReason | None]"]):
                 classes="modal-subtitle",
             )
             yield Label(f" {risk_text} · BULK ({plan.count}) ", classes=f"risk-badge {risk_class}")
+            for warning in self.warnings:
+                yield Static(f"⚠ {warning}", classes="warning-banner")
             yield Static(
                 f"⚠ This applies to {plan.count} objects, each as its own audited change "
                 "with an individual rollback snapshot.",

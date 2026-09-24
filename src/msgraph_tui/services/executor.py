@@ -11,9 +11,19 @@ audited changes linked to the original operation.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..compliance.approval import (
+    APPLIED,
+    Approval,
+    ApprovalStore,
+    ChangeRequest,
+    assert_requestable,
+    bulk_content_hash,
+    content_hash_for,
+    verify_approval,
+)
 from ..compliance.audit import AuditEvent, AuditLog, ChangeReason
 from ..compliance.rollback import (
     RollbackSnapshot,
@@ -144,6 +154,120 @@ class Executor:
         self.audit_log = audit_log
         self.rollback_store = rollback_store
         self.session = session
+        self._approvals: ApprovalStore | None = None
+
+    # ------------------------------------------------------------------
+    # Four-eyes approval (F-COMP-1)
+    # ------------------------------------------------------------------
+
+    @property
+    def approvals(self) -> ApprovalStore:
+        if self._approvals is None:
+            self._approvals = ApprovalStore(self.config.approvals_dir)
+        return self._approvals
+
+    def approval_required(self, action: ActionDefinition) -> bool:
+        return action.is_write and self.config.approval_required_for(action.risk.value)
+
+    def content_hash(self, plan: WritePlan) -> str:
+        return content_hash_for(plan.action.id, plan.params, self.session.tenant_id)
+
+    def create_change_request(
+        self, plan: WritePlan, reason: ChangeReason | None = None
+    ) -> ChangeRequest:
+        """Queue a planned change for a second person's approval (not executed)."""
+        assert_requestable(plan.action, plan.params)
+        request = ChangeRequest(
+            action_id=plan.action.id,
+            action_name=plan.action.name,
+            params=dict(plan.params),
+            risk=plan.action.risk.value,
+            requester=self.session.actor,
+            tenant_id=self.session.tenant_id,
+            preview=plan.preview.detail,
+            content_hash=self.content_hash(plan),
+            reason=(reason or ChangeReason()).to_dict(),
+        )
+        self.approvals.save_request(request)
+        self._audit_approval_event("approval_requested", request, detail={"status": "pending"})
+        return request
+
+    def create_bulk_change_request(
+        self, plan: BulkPlan, reason: ChangeReason | None = None
+    ) -> ChangeRequest:
+        items = [dict(p.params) for p in plan.plans]
+        for item in items:
+            assert_requestable(plan.action, item)
+        request = ChangeRequest(
+            action_id=plan.action.id,
+            action_name=plan.action.name,
+            params={},
+            risk=plan.action.risk.value,
+            requester=self.session.actor,
+            tenant_id=self.session.tenant_id,
+            preview=plan.plans[0].preview.detail if plan.plans else "",
+            content_hash=bulk_content_hash(plan.action.id, items, self.session.tenant_id),
+            reason=(reason or ChangeReason()).to_dict(),
+            bulk_items=items,
+        )
+        self.approvals.save_request(request)
+        self._audit_approval_event("approval_requested", request, detail={"objects": len(items)})
+        return request
+
+    def find_approval(self, plan: WritePlan) -> tuple[ChangeRequest, Approval] | None:
+        """An approved request covering this exact change, if one exists."""
+        return self.approvals.find_approved(self.content_hash(plan))
+
+    def record_approval(self, request: ChangeRequest, approval: Approval) -> None:
+        self.approvals.save_approval(approval)
+        self.approvals.set_status(request.request_id, "approved" if approval.approved else "rejected")
+        self._audit_approval_event(
+            "approval_granted" if approval.approved else "approval_rejected",
+            request,
+            detail={"approver": approval.approver, "signed": bool(approval.signature),
+                    "comment": approval.comment},
+        )
+
+    def _check_approval(
+        self, *, content_hash: str, approval: Approval | None, request_id: str | None
+    ) -> dict[str, Any]:
+        """Enforce four-eyes. Returns audit metadata or raises PipelineError."""
+        requester = self.session.actor
+        if approval is not None and request_id:
+            stored = self.approvals.load_request(request_id)
+            if stored is not None:
+                requester = stored.requester
+        ok, why = verify_approval(
+            approval,
+            content_hash=content_hash,
+            requester=requester,
+            executor=self.session.actor,
+            key=self.config.approval_signing_key(),
+        )
+        if not ok:
+            raise PipelineError(
+                f"Four-eyes approval required and not satisfied: {why}. "
+                "Submit a change request and have a different person approve it "
+                "(graphdeck approve <id> --as <name>)."
+            )
+        assert approval is not None
+        return {"request_id": approval.request_id, "approver": approval.approver,
+                "requester": requester, "signed": bool(approval.signature)}
+
+    def _audit_approval_event(self, event_type: str, request: ChangeRequest, *, detail: dict) -> None:
+        self.audit_log.append(AuditEvent(
+            actor=self.session.actor,
+            tenant_id=request.tenant_id,
+            action_id=request.action_id,
+            operation_id=request.request_id,
+            provider="approval",
+            event_type=event_type,
+            risk=request.risk,
+            request_preview=request.preview,
+            reason=request.reason,
+            result={"success": True, **detail},
+            interaction_mode="bulk" if request.is_bulk else "interactive",
+        ))
 
     # ------------------------------------------------------------------
     # Shared plumbing
@@ -299,6 +423,8 @@ class Executor:
         confirmed: bool,
         reason: ChangeReason | None = None,
         rollback_of: str | None = None,
+        approval: Approval | None = None,
+        _preapproved: dict[str, Any] | None = None,
     ) -> ResultEnvelope:
         if not confirmed:
             raise PipelineError("Write refused: confirmation not given")
@@ -319,6 +445,21 @@ class Executor:
             self._audit_write(plan, envelope, reason, event_type="change_intent", rollback_of=rollback_of)
             return envelope
 
+        # Four-eyes gate: real execution of a policy-covered risk level needs a
+        # valid approval from a different person. Dry-run rehearsal (above) and
+        # compensating rollbacks (already drift-checked and linked to an
+        # approved original) are exempt so an urgent undo is never blocked.
+        four_eyes: dict[str, Any] | None = None
+        if self.approval_required(plan.action) and not rollback_of:
+            if _preapproved is not None:
+                four_eyes = _preapproved
+            else:
+                four_eyes = self._check_approval(
+                    content_hash=self.content_hash(plan),
+                    approval=approval,
+                    request_id=approval.request_id if approval else None,
+                )
+
         envelope = await plan.selection.provider.execute(plan.action, plan.params)
         envelope.operation_id = plan.operation_id
 
@@ -338,10 +479,16 @@ class Executor:
             snapshot_id = plan.snapshot.snapshot_id
             envelope.rollback_snapshot_id = snapshot_id
 
-        validation = {
+        validation: dict[str, Any] = {
             "after_state_captured": bool(after_state),
             "result_matches_intent": envelope.success,
         }
+        if four_eyes is not None:
+            validation["four_eyes"] = four_eyes
+            if reason is not None and not reason.approval_ref:
+                reason = replace(reason, approval_ref=four_eyes["request_id"])
+            if envelope.success and _preapproved is None:
+                self.approvals.set_status(four_eyes["request_id"], APPLIED)
         self._audit_write(
             plan, envelope, reason,
             event_type=event_type,
@@ -350,8 +497,6 @@ class Executor:
             rollback_of=rollback_of,
             validation=validation,
         )
-        if rollback_of and envelope.success and plan.snapshot is None:
-            pass  # rollback of a rollback is not chained further without a snapshot
         log.info("write %s via %s -> success=%s op=%s",
                  plan.action.id, envelope.provider, envelope.success, plan.operation_id)
         return envelope
@@ -377,21 +522,43 @@ class Executor:
         ]
         return BulkPlan(action=action, plans=plans, requires_reason=self.config.require_change_reason)
 
+    def bulk_content_hash(self, plan: BulkPlan) -> str:
+        return bulk_content_hash(
+            plan.action.id, [dict(p.params) for p in plan.plans], self.session.tenant_id
+        )
+
+    def find_bulk_approval(self, plan: BulkPlan) -> tuple[ChangeRequest, Approval] | None:
+        return self.approvals.find_approved(self.bulk_content_hash(plan))
+
     async def commit_bulk(
         self,
         plan: BulkPlan,
         *,
         confirmed: bool,
         reason: ChangeReason | None = None,
+        approval: Approval | None = None,
     ) -> list[BulkItemResult]:
         if not confirmed:
             raise PipelineError("Bulk write refused: confirmation not given")
         if plan.requires_reason and (reason is None or not reason.reason.strip()):
             raise PipelineError("Bulk write refused: change reason required by policy")
+        # One approval covers the whole bulk change (bound to every object's
+        # params), verified once, then passed to each item as pre-approved.
+        preapproved: dict[str, Any] | None = None
+        if self.approval_required(plan.action) and self.config.mode is not Mode.DRY_RUN:
+            preapproved = self._check_approval(
+                content_hash=self.bulk_content_hash(plan),
+                approval=approval,
+                request_id=approval.request_id if approval else None,
+            )
         results: list[BulkItemResult] = []
         for wp, object_id in zip(plan.plans, plan.object_ids, strict=True):
-            envelope = await self.commit_write(wp, confirmed=True, reason=reason)
+            envelope = await self.commit_write(
+                wp, confirmed=True, reason=reason, _preapproved=preapproved
+            )
             results.append(BulkItemResult(object_id, envelope.success, envelope))
+        if preapproved is not None:
+            self.approvals.set_status(preapproved["request_id"], APPLIED)
         succeeded = sum(1 for r in results if r.success)
         log.info("bulk %s -> %d/%d succeeded", plan.action.id, succeeded, len(results))
         return results

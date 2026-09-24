@@ -126,3 +126,101 @@ async def test_confirm_gate_collects_full_change_reason(tmp_path):
     assert confirmed and isinstance(reason, ChangeReason)
     assert reason.requestor == "alice" and reason.approval_ref == "APPR-3"
     assert reason.ticket == "CHG-9" and reason.notes == "note"
+
+
+# --- four-eyes UI flow + app-only toggle ------------------------------------
+
+class _FakeApp:
+    """Stands in for the Textual app: returns canned modal results in order."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self.notes: list[tuple[str, str]] = []
+        self.screens: list = []
+
+    async def push_screen_wait(self, screen):
+        self.screens.append(screen)
+        return self._results.pop(0)
+
+    def notify(self, message, severity="information", timeout=None):
+        self.notes.append((severity, message))
+
+
+class _FakeView:
+    def __init__(self, results):
+        self.app = _FakeApp(results)
+
+
+async def test_write_flow_submits_then_executes_with_approval(tmp_path):
+    from msgraph_tui.app.views import run_write_flow
+    from msgraph_tui.compliance.approval import APPLIED, PENDING, make_approval
+
+    cfg = AppConfig(mode=Mode.MOCK, state_dir=tmp_path / "state",
+                    require_approval_for_risk=["high"])
+    ctx = build_context(cfg)
+    values = {"user_id": "u-0001", "enabled": False}
+    reason = ChangeReason(reason="leaver", ticket="HR-1")
+
+    # 1st pass: no approval yet → confirming only SUBMITS a request
+    view = _FakeView([values, (True, reason)])
+    await run_write_flow(view, ctx, "users.set_account_enabled", {})
+    banners = view.app.screens[1].warnings
+    assert any("FOUR-EYES APPROVAL REQUIRED" in b for b in banners)
+    assert any("Submitted for four-eyes approval" in m for _, m in view.app.notes)
+    [req] = ctx.executor.approvals.list_requests()
+    assert req.status == PENDING
+    assert not [e for e in ctx.audit_log.entries() if e["event_type"] == "change"]
+
+    # approver signs off; 2nd pass executes and marks the request applied
+    ctx.executor.record_approval(req, make_approval(req, "bob@contoso.example", approve=True))
+    view = _FakeView([values, (True, reason)])
+    await run_write_flow(view, ctx, "users.set_account_enabled", {})
+    assert any("approved by bob@contoso.example" in b for b in view.app.screens[1].warnings)
+    assert any("succeeded" in m for _, m in view.app.notes)
+    assert ctx.executor.approvals.load_request(req.request_id).status == APPLIED
+
+
+async def test_app_only_toggle_live_success_and_failure(tmp_path, monkeypatch):
+    import msgraph_tui.app.views as views
+
+    cfg = AppConfig(mode=Mode.LIVE, tenant_id="t", client_id="c", state_dir=tmp_path / "s")
+    app = GraphdeckApp(build_context(cfg))
+    async with app.run_test(size=(140, 46)) as pilot:
+        await pilot.pause(0.2)
+        app.switch_view("session")
+        await pilot.pause(0.2)
+        sv = app.query_one("#view-session", SessionView)
+
+        def broken(_cfg):
+            raise RuntimeError("certificate not found: client_secret=hunter2")
+
+        notes: list[str] = []
+        monkeypatch.setattr(app, "notify", lambda msg, **_kw: notes.append(msg))
+        monkeypatch.setattr(views, "app_only_factory", broken)
+        sv.use_app_only()
+        await pilot.pause(0.1)
+        assert cfg.auth_mode == "delegated"              # reverted
+        assert notes and "hunter2" not in notes[-1]      # secrets never reach the UI
+        assert not app.ctx.graph_rest.is_available()
+
+        monkeypatch.setattr(views, "app_only_factory", lambda _cfg: _FakeTokenProvider())
+        sv.use_app_only()
+        await pilot.pause(0.1)
+        assert cfg.auth_mode == "app-only"
+        assert app.ctx.graph_rest.is_available()
+        assert "app-only" in app.ctx.session.auth_mode
+
+
+async def test_app_only_toggle_is_noop_outside_live(tmp_path, monkeypatch):
+    import msgraph_tui.app.views as views
+
+    called = []
+    monkeypatch.setattr(views, "app_only_factory", lambda c: called.append(c))
+    app = _app(tmp_path)
+    async with app.run_test(size=(140, 46)) as pilot:
+        await pilot.pause(0.2)
+        app.switch_view("session")
+        await pilot.pause(0.2)
+        app.query_one("#view-session", SessionView).use_app_only()
+        await pilot.pause(0.1)
+    assert not called and app.ctx.config.auth_mode == "delegated"

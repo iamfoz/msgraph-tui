@@ -85,10 +85,20 @@ class AppConfig:
     # Optional path to a key file; when set, the audit chain is HMAC-signed so
     # it cannot be silently reforged without the key. See docs/security-model.md.
     audit_hmac_key_path: Path | None = None
+    # Four-eyes approval (F-COMP-1): risk levels whose writes need a second
+    # person's approval before execution, e.g. ["high", "destructive"].
+    # Empty (default) disables the requirement.
+    require_approval_for_risk: list[str] = field(default_factory=list)
+    # Optional key file used to HMAC-sign approvals (tamper-evident approvals).
+    approval_signing_key_path: Path | None = None
 
     @property
     def audit_dir(self) -> Path:
         return self.state_dir / "audit"
+
+    @property
+    def approvals_dir(self) -> Path:
+        return self.state_dir / "approvals"
 
     @property
     def snapshots_dir(self) -> Path:
@@ -103,8 +113,23 @@ class AppConfig:
         return self.state_dir / "logs" / "debug.log"
 
     def ensure_dirs(self) -> None:
-        for d in (self.audit_dir, self.snapshots_dir, self.exports_dir, self.debug_log_path.parent):
+        for d in (
+            self.audit_dir, self.snapshots_dir, self.exports_dir,
+            self.approvals_dir, self.debug_log_path.parent,
+        ):
             d.mkdir(parents=True, exist_ok=True)
+
+    def approval_required_for(self, risk: str) -> bool:
+        return risk.lower() in {r.lower() for r in self.require_approval_for_risk}
+
+    def approval_signing_key(self) -> bytes | None:
+        """Read the approval-signing key, if configured (never logged/stored)."""
+        if self.approval_signing_key_path is None:
+            return None
+        key = Path(self.approval_signing_key_path).expanduser().read_bytes().strip()
+        if not key:
+            raise ValueError(f"Approval signing key file is empty: {self.approval_signing_key_path}")
+        return key
 
     def provider_preference_for(self, action_id: str, service: str) -> str | None:
         return self.provider_preferences.get(action_id) or self.provider_preferences.get(service)
@@ -161,7 +186,15 @@ _ENV_MAP = {
     "GRAPHDECK_TENANT_ID": "tenant_id",
     "GRAPHDECK_CLIENT_ID": "client_id",
     "GRAPHDECK_ALLOW_BETA": "allow_beta",
+    "GRAPHDECK_AUTH_MODE": "auth_mode",                     # delegated | app-only
+    "GRAPHDECK_REQUIRE_APPROVAL": "require_approval_for_risk",  # e.g. "high,destructive"
 }
+
+_PATH_KEYS = (
+    "state_dir", "fixtures_dir", "audit_hmac_key_path",
+    "client_certificate_path", "approval_signing_key_path",
+)
+_AUTH_MODES = ("delegated", "app-only")
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -183,13 +216,16 @@ def load_config(path: Path | None = None) -> AppConfig:
             continue  # forward-compatible: ignore unknown keys
         if key == "mode":
             value = Mode(value)
-        elif (
-            key in ("state_dir", "fixtures_dir", "audit_hmac_key_path", "client_certificate_path")
-            and value is not None
-        ):
+        elif key in _PATH_KEYS and value is not None:
             value = Path(value).expanduser()
         elif key == "allow_beta" and isinstance(value, str):
             value = value.strip().lower() in ("1", "true", "yes")
+        elif key == "require_approval_for_risk" and isinstance(value, str):
+            value = [v.strip().lower() for v in value.split(",") if v.strip()]
+        elif key == "auth_mode":
+            value = str(value).strip().lower()
+            if value not in _AUTH_MODES:
+                raise ValueError(f"auth_mode must be one of {_AUTH_MODES}, got {value!r}")
         setattr(cfg, key, value)
     for warning in cfg.validate_endpoints():
         log.warning("%s", warning)

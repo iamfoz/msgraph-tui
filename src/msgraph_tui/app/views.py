@@ -399,18 +399,55 @@ async def run_write_flow(
     except (GraphdeckError, ValueError) as exc:
         view.app.notify(f"Cannot plan {action_id}: {exc}", severity="error")
         return
+    banners = list(warnings or [])
+    approval = None
+    needs_approval = (
+        ctx.executor.approval_required(plan.action) and ctx.config.mode is not Mode.DRY_RUN
+    )
+    if needs_approval:
+        found = ctx.executor.find_approval(plan)
+        if found is not None:
+            approval = found[1]
+            banners.append(
+                f"FOUR-EYES: approved by {approval.approver} (request {found[0].request_id}) "
+                "— confirming will execute."
+            )
+        else:
+            banners.append(
+                f"FOUR-EYES APPROVAL REQUIRED for {plan.action.risk.value} risk — confirming "
+                "SUBMITS a change request for a different person to approve. Nothing runs now."
+            )
     confirmed, reason = await view.app.push_screen_wait(
         PreviewConfirmModal(
             plan,
             mode_label=ctx.config.mode.value.upper(),
             tenant_label=f"{ctx.session.tenant_name or ctx.session.tenant_id}",
-            warnings=warnings,
+            warnings=banners or None,
         )
     )
     if not confirmed:
         view.app.notify("Cancelled — nothing was executed.", severity="warning")
         return
-    envelope = await ctx.executor.commit_write(plan, confirmed=True, reason=reason)
+    if needs_approval and approval is None:
+        try:
+            request = ctx.executor.create_change_request(plan, reason)
+        except ValueError as exc:
+            view.app.notify(f"Cannot queue for approval: {exc}", severity="error", timeout=12)
+            return
+        view.app.notify(
+            f"Submitted for four-eyes approval as {request.request_id}. Approver runs: "
+            f"graphdeck approve {request.request_id} --as <name> — then re-run this change "
+            f"here, or: graphdeck apply {request.request_id}",
+            timeout=25,
+        )
+        return
+    try:
+        envelope = await ctx.executor.commit_write(
+            plan, confirmed=True, reason=reason, approval=approval
+        )
+    except GraphdeckError as exc:
+        view.app.notify(f"Refused: {exc}", severity="error", timeout=12)
+        return
     if envelope.success:
         note = " (dry-run: not executed)" if any("Dry-run" in w for w in envelope.warnings) else ""
         rollback = " Rollback snapshot saved." if envelope.rollback_snapshot_id else ""
@@ -448,17 +485,53 @@ async def run_bulk_flow(view, ctx: AppContext, op, rows: list[dict]) -> None:
     except (GraphdeckError, ValueError) as exc:
         view.app.notify(f"Cannot plan bulk {op.action_id}: {exc}", severity="error")
         return
+    approval = None
+    banners: list[str] = []
+    needs_approval = (
+        ctx.executor.approval_required(plan.action) and ctx.config.mode is not Mode.DRY_RUN
+    )
+    if needs_approval:
+        found = ctx.executor.find_bulk_approval(plan)
+        if found is not None:
+            approval = found[1]
+            banners.append(f"FOUR-EYES: approved by {approval.approver} — confirming will execute.")
+        else:
+            banners.append(
+                "FOUR-EYES APPROVAL REQUIRED — confirming SUBMITS one change request covering "
+                f"all {plan.count} objects. Nothing runs now."
+            )
     confirmed, reason = await view.app.push_screen_wait(
         BulkConfirmModal(
             plan,
             ctx.config.mode.value.upper(),
             ctx.session.tenant_name or ctx.session.tenant_id,
+            warnings=banners or None,
         )
     )
     if not confirmed:
         view.app.notify("Bulk cancelled — nothing was executed.", severity="warning")
         return
-    results = await ctx.executor.commit_bulk(plan, confirmed=True, reason=reason)
+    if needs_approval and approval is None:
+        try:
+            request = ctx.executor.create_bulk_change_request(plan, reason)
+        except ValueError as exc:
+            view.app.notify(f"Cannot queue for approval: {exc}", severity="error", timeout=12)
+            return
+        view.app.notify(
+            f"Submitted bulk change for four-eyes approval as {request.request_id} "
+            f"({plan.count} objects). Approver: graphdeck approve {request.request_id} --as "
+            f"<name>; then graphdeck apply {request.request_id}",
+            timeout=25,
+        )
+        view._selected_ids.clear()
+        return
+    try:
+        results = await ctx.executor.commit_bulk(
+            plan, confirmed=True, reason=reason, approval=approval
+        )
+    except GraphdeckError as exc:
+        view.app.notify(f"Refused: {exc}", severity="error", timeout=12)
+        return
     ok = sum(1 for r in results if r.success)
     failed = [r for r in results if not r.success]
     view.app.notify(
@@ -583,6 +656,16 @@ def _default_device_code_factory(config, message_callback):
 device_code_factory = _default_device_code_factory
 
 
+def _default_app_only_factory(config):
+    from ..providers.graph_rest import MsalClientCredentialTokenProvider
+
+    return MsalClientCredentialTokenProvider(config)
+
+
+# Overridable in tests (no MSAL / certificate needed).
+app_only_factory = _default_app_only_factory
+
+
 class SessionView(Vertical):
     BINDINGS = [("r", "refresh", "Refresh")]
 
@@ -597,6 +680,7 @@ class SessionView(Vertical):
             yield Static("", id="provider-info", classes="dash-tile")
             with Horizontal(classes="modal-buttons"):
                 yield Button("Sign in (device code)", id="sign-in", variant="primary")
+                yield Button("Use app-only (certificate)", id="app-only")
                 yield Button("Check PowerShell modules", id="check-modules")
                 yield Button("Verify audit chain", id="verify-audit")
                 yield Button("Export evidence pack", id="evidence")
@@ -617,6 +701,7 @@ class SessionView(Vertical):
             f"  Default scopes:  {', '.join(cfg.default_scopes)}\n"
             f"  Beta endpoints:  {'allowed' if cfg.allow_beta else 'disabled'}\n"
             f"  Change reasons:  {'required' if cfg.require_change_reason else 'optional'}\n"
+            f"  Four-eyes:       {self._four_eyes_summary()}\n"
             f"  Audit log:       {self.ctx.audit_log.path}\n"
             f"  Snapshots:       {cfg.snapshots_dir}\n"
             f"  Exports:         {cfg.exports_dir}"
@@ -686,6 +771,52 @@ class SessionView(Vertical):
         if callable(update):
             update()
         self.app.notify(f"Signed in as {self.ctx.session.actor}. Graph REST is now available.")
+
+    def _four_eyes_summary(self) -> str:
+        levels = self.ctx.config.require_approval_for_risk
+        if not levels:
+            return "off"
+        try:
+            from ..compliance.approval import PENDING
+            pending = sum(
+                1 for r in self.ctx.executor.approvals.list_requests() if r.status == PENDING
+            )
+        except OSError:
+            pending = 0
+        return f"required for {', '.join(levels)} · {pending} pending request(s)"
+
+    @on(Button.Pressed, "#app-only")
+    def use_app_only(self) -> None:
+        """Switch to unattended app-only (client-certificate) auth interactively."""
+        cfg = self.ctx.config
+        if cfg.mode is not Mode.LIVE:
+            self.app.notify(
+                f"App-only auth applies to live mode only — {cfg.mode.value} mode uses fixtures.",
+                severity="warning",
+            )
+            return
+        previous = cfg.auth_mode
+        cfg.auth_mode = "app-only"
+        try:
+            token_provider = app_only_factory(cfg)
+            token_provider.get_token()  # fail fast: bad cert / consent surfaces now
+        except Exception as exc:  # misconfiguration and auth errors are user-facing
+            cfg.auth_mode = previous
+            from ..core.redaction import redact_text
+            self.app.notify(
+                "App-only sign-in failed: " + redact_text(str(exc)) + " — set tenant_id, "
+                "client_id, client_certificate_path and client_certificate_thumbprint.",
+                severity="error", timeout=15,
+            )
+            return
+        self.ctx.graph_rest.attach_token_provider(token_provider)
+        self.ctx.session.actor = token_provider.account_label()
+        self.ctx.session.auth_mode = "app-only (certificate)"
+        self.action_refresh()
+        update = getattr(self.app, "_update_status_bar", None)
+        if callable(update):
+            update()
+        self.app.notify(f"Using app-only auth as {self.ctx.session.actor}.")
 
     @on(Button.Pressed, "#verify-audit")
     def verify_audit(self) -> None:

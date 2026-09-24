@@ -515,6 +515,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     ac = sub.add_parser("actions", help="print the action catalog (registry as data)")
     ac.add_argument("--json", action="store_true", help="emit JSON")
 
+    ap = sub.add_parser("approvals", help="list four-eyes change requests")
+    ap.add_argument("--all", action="store_true", help="include approved/rejected/applied")
+
+    av = sub.add_parser("approve", help="approve/reject a change request (as a different person)")
+    av.add_argument("request_id")
+    av.add_argument("--as", dest="approver", required=True, help="approver identity")
+    av.add_argument("--reject", action="store_true", help="reject instead of approve")
+    av.add_argument("--comment", default="", help="optional review comment")
+
+    aa = sub.add_parser("apply", help="execute an approved change request")
+    aa.add_argument("request_id")
+
     return parser.parse_args(argv)
 
 
@@ -551,6 +563,14 @@ def _dispatch_command(args: argparse.Namespace, config: AppConfig) -> int:
         )
     if args.command == "actions":
         return commands.list_actions(as_json=args.json)
+    if args.command == "approvals":
+        return commands.list_approvals(config, show_all=args.all)
+    if args.command == "approve":
+        return commands.approve(
+            config, args.request_id, args.approver, reject=args.reject, comment=args.comment
+        )
+    if args.command == "apply":
+        return commands.apply_request(config, args.request_id)
     raise ValueError(f"Unknown command: {args.command}")
 
 
