@@ -78,7 +78,9 @@ intended changes.
 
 Environment overrides: `GRAPHDECK_MODE`, `GRAPHDECK_TENANT_ID`,
 `GRAPHDECK_CLIENT_ID`, `GRAPHDECK_ALLOW_BETA`, `GRAPHDECK_CONFIG_DIR`,
-`GRAPHDECK_STATE_DIR`.
+`GRAPHDECK_STATE_DIR`, `GRAPHDECK_AUTH_MODE` (`delegated` or `app-only`),
+`GRAPHDECK_REQUIRE_APPROVAL` (comma-separated risk levels, e.g.
+`high,destructive`).
 
 ## Where Graphdeck keeps data
 
@@ -122,7 +124,49 @@ graphdeck evidence-pack --zip              # export an evidence pack (period: --
 graphdeck actions --json                   # machine-readable action catalog (registry as data)
 graphdeck purge --logs --yes               # delete debug logs
 graphdeck purge --all --yes                # logs + exports + audit (audit is evidence: needs --yes)
+graphdeck approvals [--all]                # list four-eyes change requests (pending by default)
+graphdeck approve <id> --as <name>         # approve as a different person (--reject, --comment)
+graphdeck apply <id>                       # execute an approved request through the full pipeline
 ```
+
+## Four-eyes approval (optional)
+
+Turn it on per risk level, in the config file or the environment:
+
+```json
+{ "require_approval_for_risk": ["high", "destructive"],
+  "approval_signing_key_path": "/secure/approval.key" }
+```
+
+When a gated change reaches the confirmation screen, a banner says approval is
+needed. Confirming **submits a change request** instead of executing; nothing
+changes in the tenant. A different person reviews and decides:
+
+```bash
+graphdeck approvals                        # what's waiting
+graphdeck approve 3f9c1a2b7d4e --as bob@contoso.example --comment "checked with HR"
+```
+
+The requester then either re-runs the same change in the TUI (the banner now
+shows who approved it and confirming executes) or runs `graphdeck apply <id>`.
+
+Rules enforced by the Executor:
+
+- The approval covers **that exact change**: same action, parameters and
+  tenant. Changing any value, or targeting another object, needs a new request.
+- The approver cannot be the requester or the person executing.
+- A bulk run needs one approval that covers every selected object.
+- An applied request cannot be used again. Rejected requests cannot be applied.
+- Rollbacks are never gated, so an urgent undo is not held up.
+- Changes whose parameters contain secrets cannot be queued; the request file
+  would store them.
+- Dry-run mode is not gated because nothing executes.
+
+Requests and approvals are JSON files under `<state>/approvals/`; every
+request, decision and execution is written to the audit log. With
+`approval_signing_key_path` set, approvals are HMAC-signed and unsigned or
+altered approvals are refused. See `docs/security-model.md` for what that
+does and doesn't prove.
 
 ## Tamper-proofing the audit log (optional)
 
@@ -179,7 +223,10 @@ original operation.
 - **App-only (certificate) auth** for unattended/headless runs: set
   `auth_mode: "app-only"`, `client_certificate_path`, and
   `client_certificate_thumbprint` (plus tenant/client id) in the config and
-  live mode authenticates automatically — no interactive sign-in.
+  live mode authenticates automatically — no interactive sign-in. Or switch at
+  runtime: **Session & providers → Use app-only (certificate)**. The button
+  requests a token straight away, so a bad certificate or missing consent shows
+  up immediately, and it leaves your current sign-in in place if that fails.
 - **Bulk multi-select**: `Space` to select rows (`Ctrl+A` all, `Ctrl+D` clear),
   then a write key applies to the whole selection through a bulk wizard with a
   typed `VERB n` confirmation. Each object gets its own audited change and
@@ -190,17 +237,27 @@ original operation.
   PowerShell host in live mode (one `Connect-ExchangeOnline` reused across
   commands) and on fixtures offline. Live Exchange needs `pwsh` +
   `ExchangeOnlineManagement` + a tenant.
+- **Teams** (meeting and messaging policies, per-user lookup, grant a meeting
+  policy with full rollback), **SharePoint** (site list/detail, set a site's
+  sharing capability: high risk, typed confirm, full rollback; sites allowing
+  guest sharing are flagged) and **Compliance → Retention / DLP policies**
+  (read-only; DLP policies still in test mode are flagged). Live use needs
+  `pwsh` plus `MicrosoftTeams`, `Microsoft.Online.SharePoint.PowerShell` or
+  `ExchangeOnlineManagement` (for `Connect-IPPSSession`).
+- **Four-eyes approval**: see the section above.
 
 ## Known limitations
 
-- Live coverage today: Users / Groups / Licences via Graph REST and Exchange
-  mailboxes via workload PowerShell. Teams, SharePoint, Intune, Roles and Apps
-  modules remain designed (see capability matrix) — not yet wired to screens.
+- Live coverage today: Users / Groups / Licences via Graph REST; Exchange,
+  Teams policies, SharePoint sites and Purview retention/DLP (read-only) via
+  workload PowerShell. Intune, Roles and Apps modules remain designed (see
+  capability matrix).
 - Graph SDK engine is a stub (REST provides the same coverage).
-- No four-eyes approval workflow yet (approval references *can* be recorded in
-  the change-reason fields and appear in evidence packs).
+- Four-eyes approvals use typed identities and an optional shared signing key,
+  not per-person cryptographic signatures, and requests travel as local files
+  only (no git/PR or webhook channel yet).
 - Server-side `$search`/`$filter` for large tenants is not wired; table
   filtering is client-side over the fetched page set.
-- Workload PowerShell (Exchange etc.) has been validated against fixtures and a
+- Workload PowerShell (Exchange, Teams, SharePoint, Purview) has been validated against fixtures and a
   fake host transport, not a live tenant — the persistent host's real `pwsh`
   behaviour still needs tenant validation.

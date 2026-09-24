@@ -62,6 +62,7 @@
 | Local audit tampering | Hash chain + out-of-band **head anchor** (detects tail truncation), **advisory locking** (safe concurrent append), **optional HMAC keying** (forgery-resistant with an operator key), verification command, and optional off-host copies. |
 | Endpoint tampering (token exfiltration) | `graph_base`/`authority` validated on load — non-HTTPS is rejected and non-Microsoft hosts warn loudly before any token is sent. |
 | Malicious rollback (replaying stale state) | Drift detection blocks rollback when the object changed since the operation; blast-radius check; snapshots single-use. |
+| Single admin making a high-impact change unilaterally | Optional four-eyes gate in the Executor: the change request is bound to a content hash of action + parameters + tenant, the approver must be a different identity from the requester and the executor, bulk runs need one approval covering every object, applied requests cannot be replayed, and every decision is audited. |
 | Over-privileged app registration | Per-action scope display encourages minimal grants; default scope set is read-only. |
 
 ## Residual risks / honest limitations
@@ -82,6 +83,16 @@
   values rendered into command strings (e.g. a PowerShell `-Password 'x'`).
   It is deny-list + pattern based; a genuinely novel secret shape in free text
   could still slip through, so treat exports as sensitive regardless.
+- Four-eyes identities are the names people type (`--as bob`) plus the
+  signed-in account, not verified credentials. The optional
+  `approval_signing_key_path` HMAC proves an approval was produced by someone
+  holding the shared key and was not altered afterwards; it does **not** prove
+  *which* key-holder made it. Treat four-eyes as a process control that makes
+  bypassing review deliberate and visible in the audit trail, not as
+  cryptographic non-repudiation. Anyone who can write to the state directory
+  and holds the key could forge an approval, so keep the key apart from
+  operators' workstations where segregation of duties matters. Rollbacks are
+  deliberately exempt from the gate.
 - PowerShell module output is parsed defensively but modules execute with
   full user privileges — install modules only from trusted sources
   (Graphdeck never installs them for you).

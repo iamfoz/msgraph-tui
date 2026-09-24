@@ -111,8 +111,11 @@ Small, high-value, mostly UI/plumbing; unblocks the live product and restores ho
 > F-FIX-9 (false `-WhatIf` note fixed), F-FIX-10 (`scc_powershell` registered),
 > F-FIX-12 (debug-log rotation), F-FIX-13 (role-assignable warning in gate),
 > plus the security-audit hardening (audit head anchor, optional HMAC, locking,
-> broadened redaction, endpoint validation). Remaining: F-FIX-11 (derive browse
-> columns from `output_schema`) and app-only auth (F-AUTH-2).
+> broadened redaction, endpoint validation). Since then: F-AUTH-2 (certificate
+> app-only auth, config-driven or via the Session view toggle), F-PLAT-1
+> (persistent PowerShell host), F-UX-1 (multi-select bulk plans) and F-COMP-1
+> (four-eyes approval). Remaining in this epic: F-FIX-11 (derive browse columns
+> from `output_schema`).
 
 | ID | Feature | Prio | Effort |
 |---|---|---|---|
@@ -161,6 +164,15 @@ Graph-only where Graph suffices; workload PowerShell where it is the only suppor
 | F-EXO-8 | **Email authentication posture** — per-domain SPF/DMARC via local DNS (no write), DKIM state (`Get-DkimSigningConfig`), enable + `Rotate-DkimSigningConfig` as audited writes. Post-2024 bulk-sender relevance. | EXO PS + local DNS | P1 |
 
 ### 5.3 Teams / SharePoint / Intune / Purview / Service health
+
+> **Delivered (first slice):** F-TEAM-1 — meeting/messaging policy browse,
+> per-user policy lookup and a rollback-capable *grant meeting policy*;
+> F-SPO-1 — site inventory/detail and a high-risk, rollback-capable *set
+> sharing capability*; Purview — read-only retention and DLP policy browse
+> (DLP in test mode flagged). All run on the persistent PowerShell host in live
+> mode and on fixtures offline; none has yet been validated against a live
+> tenant. Diff-vs-Global, calling/app policies, quota/lock writes, deleted-site
+> restore and hubs remain open.
 | ID | Feature | Provider | Prio |
 |---|---|---|---|
 | F-TEAM-1 | **Teams policy management** — meeting/messaging/calling/app policies, diff-vs-Global, bulk assignment, federation/external-access. | MicrosoftTeams PS (policy CRUD); Graph for inventory | P1 |
@@ -212,6 +224,17 @@ Graph-only where Graph suffices; workload PowerShell where it is the only suppor
 | F-MT-11 | **Migration workbench** — read-only cross-tenant mailbox migration status, endpoint config, snapshotted resumable UPN/domain-rename waves. | EXO PS + Graph | P3 |
 
 ## 8. Epic E — Governance, compliance & change control
+
+> **Delivered:** F-COMP-1 (file channel). Opt-in per risk level
+> (`require_approval_for_risk`). A change request is bound to a SHA-256 content
+> hash of action + parameters + tenant; the approver must differ from both the
+> requester and the executor; bulk runs need one approval covering every
+> object; rollbacks are exempt; applied requests cannot be replayed; all
+> decisions are audited. **Deviation from the spec:** approvals are signed with
+> an optional *shared* HMAC key rather than per-approver Ed25519 keys, so the
+> signature proves the approval was made by a key-holder and not tampered with,
+> but it is not per-person non-repudiation. Ed25519 and the git/PR and webhook
+> channels remain open.
 
 | ID | Feature | Provider | Prio |
 |---|---|---|---|

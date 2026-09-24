@@ -64,7 +64,10 @@ Legend: ✅ full support · ⚠️ partial · ❌ not practical · 🔶 stub/des
 Graph REST covers teams/channels/membership reads and many writes ✅; policy
 management (meeting/messaging/calling policies, policy assignment) is
 MicrosoftTeams PowerShell ✅ → preferred provider is **graph_rest for
-inventory/membership, teams_powershell for policies**. Implemented: 🔶 designed.
+inventory/membership, teams_powershell for policies**. Implemented: ✅ policies
+(first slice) — `teams.meeting_policies.list`, `teams.messaging_policies.list`,
+`teams.user_policies.get`, `teams.grant_meeting_policy` (medium risk, full
+rollback). Team/channel inventory and lifecycle: 🔶 designed.
 
 ## SharePoint / OneDrive
 
@@ -72,7 +75,9 @@ Graph REST covers sites/drives/permissions reads well ✅; tenant-level admin
 settings (sharing caps, site properties) are SPO PowerShell ✅ (or PnP,
 non-Microsoft-supported — not used by default). Preferred: graph_rest for
 sites inventory, **sharepoint_powershell for tenant settings**. Implemented:
-🔶 designed.
+✅ first slice on SPO PowerShell — `sharepoint.sites.list`,
+`sharepoint.site.get`, `sharepoint.set_sharing` (high risk, typed confirm,
+full rollback). OneDrive, quota/lock writes and sharing-link audit: 🔶 designed.
 
 ## Intune / Devices
 
@@ -86,7 +91,8 @@ Implemented: 🔶 designed (read-only first).
 eDiscovery ⚠️ some Graph beta; retention/DLP policy management ❌ Graph —
 **Security & Compliance PowerShell is required** ✅ (Connect-IPPSSession).
 App-only support ⚠️ limited. Rollback: ⚠️ manual-guidance for most policy
-objects. Implemented: 🔶 designed.
+objects. Implemented: ✅ read-only — `scc.retention_policies.list`,
+`scc.dlp_policies.list`. Policy writes and eDiscovery: 🔶 designed.
 
 ## Audit logs / sign-ins
 
@@ -102,5 +108,5 @@ trail is ✅ implemented).
 |---|---|
 | mock | ✅ full (all MVP actions, mutation, error simulation) |
 | graph_rest | ✅ implemented (auth, pagination, throttling, normalisation) |
-| powershell (graph/exchange/teams/spo) | ✅ engine implemented (builder, parser, module detection); workload actions land per milestone |
+| powershell (graph/exchange/teams/spo/scc) | ✅ engine implemented (builder, parser, module detection, persistent host in live mode); Exchange, Teams, SharePoint and Purview actions shipped — validated against fixtures and a fake host, not yet a live tenant |
 | graph_sdk | 🔶 interface-complete stub; REST provides parity meanwhile |

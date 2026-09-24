@@ -52,9 +52,12 @@ graphdeck --live
 ## Status
 
 Users, Groups and Licences modules end-to-end (mock + live Graph REST with
-working device-code sign-in), PowerShell engine ready for workload modules,
-audit/rollback/evidence complete, and a comprehensive test suite that runs with
-no tenant, network, or PowerShell.
+device-code or certificate app-only sign-in); Exchange, Teams, SharePoint and
+Purview (read-only) modules on a persistent PowerShell host; bulk multi-select
+changes; an optional four-eyes approval gate (`graphdeck approvals / approve /
+apply`); audit/rollback/evidence complete; and a test suite that runs with no
+tenant, network, or PowerShell. The workload PowerShell modules are tested
+against fixtures and a fake host, not yet a live tenant.
 
 Recent hardening & polish: tamper-evident audit log with a head anchor
 (truncation detection), optional HMAC keying and concurrency locking; broadened
