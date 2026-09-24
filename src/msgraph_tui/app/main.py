@@ -540,6 +540,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     ai = sub.add_parser("approval-import", help="import a signed approval file")
     ai.add_argument("path", type=Path)
 
+    st = sub.add_parser("smoke-test", help="run every read-only action once and report (no writes)")
+    st.add_argument("--service", action="append", dest="services",
+                    help="limit to a service (repeatable), e.g. --service users")
+    st.add_argument("--json", action="store_true", help="emit the report as JSON")
+
     aa = sub.add_parser("apply", help="execute an approved change request")
     aa.add_argument("request_id")
 
@@ -597,6 +602,10 @@ def _dispatch_command(args: argparse.Namespace, config: AppConfig) -> int:
         return commands.export_request(config, args.request_id, out_file=args.out)
     if args.command == "approval-import":
         return commands.import_approval(config, args.path)
+    if args.command == "smoke-test":
+        from ..services.smoke import smoke_test
+
+        return smoke_test(config, services=args.services, as_json=args.json)
     if args.command == "apply":
         return commands.apply_request(config, args.request_id)
     raise ValueError(f"Unknown command: {args.command}")

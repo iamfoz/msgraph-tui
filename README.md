@@ -57,7 +57,8 @@ Purview (read-only) modules on a persistent PowerShell host; bulk multi-select
 changes; an optional four-eyes approval gate with personal Ed25519 approver keys,
 offline signing, git/PR review and webhook notifications; audit/rollback/evidence complete; and a test suite that runs with no
 tenant, network, or PowerShell. The workload PowerShell modules are tested
-against fixtures and a fake host, not yet a live tenant.
+against fixtures and a fake host, not yet a live tenant: `graphdeck --live
+smoke-test` checks every read path against yours in one command.
 
 Recent hardening & polish: tamper-evident audit log with a head anchor
 (truncation detection), optional HMAC keying and concurrency locking; broadened

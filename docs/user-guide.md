@@ -83,6 +83,19 @@ Environment overrides: `GRAPHDECK_MODE`, `GRAPHDECK_TENANT_ID`,
 `GRAPHDECK_REQUIRE_APPROVAL` (comma-separated risk levels, e.g.
 `high,destructive`).
 
+### Validating against your tenant
+
+Once your tenant and app registration are configured, run `graphdeck --live smoke-test` (or
+`GRAPHDECK_MODE=live graphdeck smoke-test`). With delegated auth it first shows a
+device code to sign in with; with app-only auth it signs in by itself. It runs every **read-only**
+action once. Detail lookups use the first object from the matching list, e.g.
+`users.get` uses the first user from `users.list`. It prints ✓/✗/– per action
+with provider, row count and timing, and writes a JSON report to
+`<state>/exports/`. Write actions are never run. Narrow it with `--service`
+(for example `--service exchange --service teams`) while setting up one
+workload's permissions or PowerShell modules. A failure shows the error code
+and the fix Graphdeck suggests (missing scope, role, module or consent).
+
 ## Where Graphdeck keeps data
 
 | Path | Contents |
@@ -125,6 +138,7 @@ graphdeck evidence-pack --zip              # export an evidence pack (period: --
 graphdeck actions --json                   # machine-readable action catalog (registry as data)
 graphdeck purge --logs --yes               # delete debug logs
 graphdeck purge --all --yes                # logs + exports + audit (audit is evidence: needs --yes)
+graphdeck smoke-test [--service teams]     # run every read-only action once; report + JSON (exit 0/1)
 graphdeck approvals [--all]                # list four-eyes change requests (pending by default)
 graphdeck approve <id> --as <name>         # approve as a different person (--reject, --comment)
 graphdeck apply <id>                       # execute an approved request through the full pipeline
