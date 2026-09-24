@@ -1,0 +1,5 @@
+[
+  {"name": "Credit Card Number Protection", "mode": "Enable", "state": "Enabled", "workload": "Exchange, SharePoint, OneDriveForBusiness, Teams"},
+  {"name": "PII Detection (Exchange)", "mode": "TestWithNotifications", "state": "Enabled", "workload": "Exchange"},
+  {"name": "Source Code Exfiltration Guard", "mode": "TestWithoutNotifications", "state": "Enabled", "workload": "Teams, OneDriveForBusiness"}
+]

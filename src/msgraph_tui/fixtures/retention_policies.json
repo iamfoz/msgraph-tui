@@ -1,0 +1,5 @@
+[
+  {"name": "Finance 7-Year Retention", "enabled": true, "mode": "Enforce", "workload": "Exchange, SharePoint, OneDriveForBusiness", "comment": "Statutory retention for financial records"},
+  {"name": "General Records Management", "enabled": true, "mode": "Enforce", "workload": "Exchange, SharePoint", "comment": "Org-wide baseline retention"},
+  {"name": "HR Pilot (not yet enforced)", "enabled": false, "mode": "PendingDeletion", "workload": "Exchange", "comment": "Pilot policy for HR mailboxes, not yet rolled out"}
+]

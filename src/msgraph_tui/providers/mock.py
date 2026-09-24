@@ -75,6 +75,13 @@ class MockTenant:
         self.mailboxes: list[dict] = _load_fixture("mailboxes", fixtures_dir)
         self.mailbox_permissions: dict[str, list] = _load_fixture("mailbox_permissions", fixtures_dir)
         self.inbox_rules: dict[str, list] = _load_fixture("inbox_rules", fixtures_dir)
+        teams_data: dict = _load_fixture("teams_policies", fixtures_dir)
+        self.teams_meeting_policies: list[dict] = teams_data["meetingPolicies"]
+        self.teams_messaging_policies: list[dict] = teams_data["messagingPolicies"]
+        self.teams_online_users: list[dict] = teams_data["onlineUsers"]
+        self.spo_sites: list[dict] = _load_fixture("spo_sites", fixtures_dir)
+        self.retention_policies: list[dict] = _load_fixture("retention_policies", fixtures_dir)
+        self.dlp_policies: list[dict] = _load_fixture("dlp_policies", fixtures_dir)
 
     def user(self, user_id: str) -> dict | None:
         return next(
@@ -102,6 +109,18 @@ class MockTenant:
              if s["skuId"] == sku_id or s["skuPartNumber"] == sku_id),
             None,
         )
+
+    def teams_user(self, user_id: str) -> dict | None:
+        key = str(user_id).lower()
+        return next(
+            (u for u in self.teams_online_users
+             if u["id"].lower() == key or str(u.get("userPrincipalName", "")).lower() == key),
+            None,
+        )
+
+    def spo_site(self, site_url: str) -> dict | None:
+        key = str(site_url).lower()
+        return next((s for s in self.spo_sites if s["url"].lower() == key), None)
 
 
 def _project(row: dict, columns: list[str]) -> dict:
@@ -144,6 +163,15 @@ class MockProvider(Provider):
             "exchange.mailbox_permissions": self._mailbox_permissions,
             "exchange.inbox_rules": self._inbox_rules,
             "exchange.set_forwarding": self._set_forwarding,
+            "teams.meeting_policies.list": self._teams_meeting_policies_list,
+            "teams.messaging_policies.list": self._teams_messaging_policies_list,
+            "teams.user_policies.get": self._teams_user_policies_get,
+            "teams.grant_meeting_policy": self._teams_grant_meeting_policy,
+            "sharepoint.sites.list": self._spo_sites_list,
+            "sharepoint.site.get": self._spo_site_get,
+            "sharepoint.set_sharing": self._spo_set_sharing,
+            "scc.retention_policies.list": self._scc_retention_policies_list,
+            "scc.dlp_policies.list": self._scc_dlp_policies_list,
             "session.organization": lambda p: dict(self.tenant.organization),
         }
 
@@ -463,6 +491,64 @@ class MockProvider(Provider):
         mbx["forwardingSmtpAddress"] = p.get("forwarding_address") or None
         mbx["deliverToMailboxAndForward"] = bool(p.get("deliver_and_forward"))
         return dict(mbx)
+
+    # -- Microsoft Teams -------------------------------------------------
+
+    def _teams_meeting_policies_list(self, p: dict) -> list[dict]:
+        return [dict(pol) for pol in self.tenant.teams_meeting_policies]
+
+    def _teams_messaging_policies_list(self, p: dict) -> list[dict]:
+        return [dict(pol) for pol in self.tenant.teams_messaging_policies]
+
+    def _require_teams_user(self, p: dict) -> dict:
+        user = self.tenant.teams_user(p.get("user_id", ""))
+        if user is None:
+            raise _MockError(NormalizedError(
+                ErrorCategory.NOT_FOUND, f"Teams user {p.get('user_id')!r} not found", status=404,
+            ))
+        return user
+
+    def _teams_user_policies_get(self, p: dict) -> dict:
+        return dict(self._require_teams_user(p))
+
+    def _teams_grant_meeting_policy(self, p: dict) -> dict:
+        user = self._require_teams_user(p)
+        policy_name = p.get("policy_name")
+        if not any(pol["identity"] == policy_name for pol in self.tenant.teams_meeting_policies):
+            raise _MockError(NormalizedError(
+                ErrorCategory.INVALID_INPUT, f"Meeting policy {policy_name!r} does not exist",
+            ))
+        user["teamsMeetingPolicy"] = policy_name
+        return dict(user)
+
+    # -- SharePoint Online ------------------------------------------------
+
+    def _require_spo_site(self, p: dict) -> dict:
+        site = self.tenant.spo_site(p.get("site_url", ""))
+        if site is None:
+            raise _MockError(NormalizedError(
+                ErrorCategory.NOT_FOUND, f"Site {p.get('site_url')!r} not found", status=404,
+            ))
+        return site
+
+    def _spo_sites_list(self, p: dict) -> list[dict]:
+        return [dict(s) for s in self.tenant.spo_sites]
+
+    def _spo_site_get(self, p: dict) -> dict:
+        return dict(self._require_spo_site(p))
+
+    def _spo_set_sharing(self, p: dict) -> dict:
+        site = self._require_spo_site(p)
+        site["sharingCapability"] = p.get("sharing_capability")
+        return dict(site)
+
+    # -- Security & Compliance (Purview) ---------------------------------
+
+    def _scc_retention_policies_list(self, p: dict) -> list[dict]:
+        return [dict(pol) for pol in self.tenant.retention_policies]
+
+    def _scc_dlp_policies_list(self, p: dict) -> list[dict]:
+        return [dict(pol) for pol in self.tenant.dlp_policies]
 
 
 class _MockError(Exception):

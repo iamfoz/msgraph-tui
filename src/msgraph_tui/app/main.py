@@ -145,9 +145,95 @@ MAILBOXES_SPEC = BrowseSpec(
 )
 
 
+TEAMS_MEETING_POLICIES_SPEC = BrowseSpec(
+    id="teams-meeting-policies",
+    title="Meeting policies — Microsoft Teams",
+    list_action="teams.meeting_policies.list",
+    columns=[
+        ("identity", "Policy"),
+        ("description", "Description"),
+        ("allowMeetNow", "Meet now"),
+        ("allowCloudRecording", "Cloud recording"),
+        ("allowPSTNUsersToBypassLobby", "PSTN bypass lobby"),
+        ("designatedPresenterRoleMode", "Presenter role mode"),
+    ],
+    row_ops=[
+        RowOp("g", "Grant to user", "teams.grant_meeting_policy", "write", {"policy_name": "identity"}),
+    ],
+)
+
+TEAMS_MESSAGING_POLICIES_SPEC = BrowseSpec(
+    id="teams-messaging-policies",
+    title="Messaging policies — Microsoft Teams",
+    list_action="teams.messaging_policies.list",
+    columns=[
+        ("identity", "Policy"),
+        ("description", "Description"),
+        ("allowUserEditMessage", "Edit messages"),
+        ("allowUserDeleteMessage", "Delete messages"),
+        ("allowGiphy", "Giphy"),
+        ("allowMemes", "Memes"),
+    ],
+)
+
+SPO_SITES_SPEC = BrowseSpec(
+    id="spo-sites",
+    title="Sites — SharePoint Online",
+    list_action="sharepoint.sites.list",
+    columns=[
+        ("url", "Url"),
+        ("title", "Title"),
+        ("storageQuota", "Storage quota (MB)"),
+        ("storageUsedCurrent", "Storage used (MB)"),
+        ("sharingCapability", "Sharing"),
+        ("lockState", "Lock state"),
+    ],
+    detail_action="sharepoint.site.get",
+    detail_param="site_url",
+    row_ops=[
+        RowOp("s", "Set sharing capability", "sharepoint.set_sharing", "write", {"site_url": "url"},
+              prefill=lambda row: {"sharing_capability": row.get("sharingCapability")}),
+    ],
+    warning=lambda row: (
+        "⚠ EXTERNAL USER AND GUEST SHARING — anyone links are allowed on this site."
+        if row.get("sharingCapability") == "ExternalUserAndGuestSharing" else None
+    ),
+)
+
+RETENTION_POLICIES_SPEC = BrowseSpec(
+    id="retention-policies",
+    title="Retention policies — Security & Compliance",
+    list_action="scc.retention_policies.list",
+    columns=[
+        ("name", "Name"),
+        ("enabled", "Enabled"),
+        ("mode", "Mode"),
+        ("workload", "Workload"),
+        ("comment", "Comment"),
+    ],
+)
+
+DLP_POLICIES_SPEC = BrowseSpec(
+    id="dlp-policies",
+    title="DLP policies — Security & Compliance",
+    list_action="scc.dlp_policies.list",
+    columns=[
+        ("name", "Name"),
+        ("mode", "Mode"),
+        ("state", "State"),
+        ("workload", "Workload"),
+    ],
+    warning=lambda row: (
+        "⚠ POLICY STILL IN TEST MODE — not actively enforcing/blocking."
+        if str(row.get("mode", "")).startswith("Test") else None
+    ),
+)
+
+
 # Which module view owns each action id prefix (for palette navigation).
 _ACTION_VIEW = {
     "users": "users", "groups": "groups", "licenses": "skus", "exchange": "mailboxes",
+    "teams": "teams-meeting-policies", "sharepoint": "spo-sites", "scc": "retention-policies",
 }
 
 
@@ -263,9 +349,16 @@ class GraphdeckApp(App):
                 lic.add_leaf("Disabled users w/ licences", data="disabled-licensed")
                 exo = tree.root.add("📧 Exchange", expand=True)
                 exo.add_leaf("Mailboxes", data="mailboxes")
+                teams = tree.root.add("🟣 Teams", expand=True)
+                teams.add_leaf("Meeting policies", data="teams-meeting-policies")
+                teams.add_leaf("Messaging policies", data="teams-messaging-policies")
+                spo = tree.root.add("🔷 SharePoint", expand=True)
+                spo.add_leaf("Sites", data="spo-sites")
                 comp = tree.root.add("🧾 Compliance", expand=True)
                 comp.add_leaf("Audit log", data="audit")
                 comp.add_leaf("Change history & rollback", data="changes")
+                comp.add_leaf("Retention policies", data="retention-policies")
+                comp.add_leaf("DLP policies", data="dlp-policies")
                 yield tree
                 yield ContentSwitcher(id="content", initial=None)
             yield LogsPanel(id="logs-panel")
@@ -304,6 +397,11 @@ class GraphdeckApp(App):
             "skus": lambda: BrowseView(ctx, SKUS_SPEC),
             "disabled-licensed": lambda: BrowseView(ctx, DISABLED_LICENSED_SPEC),
             "mailboxes": lambda: BrowseView(ctx, MAILBOXES_SPEC),
+            "teams-meeting-policies": lambda: BrowseView(ctx, TEAMS_MEETING_POLICIES_SPEC),
+            "teams-messaging-policies": lambda: BrowseView(ctx, TEAMS_MESSAGING_POLICIES_SPEC),
+            "spo-sites": lambda: BrowseView(ctx, SPO_SITES_SPEC),
+            "retention-policies": lambda: BrowseView(ctx, RETENTION_POLICIES_SPEC),
+            "dlp-policies": lambda: BrowseView(ctx, DLP_POLICIES_SPEC),
             "audit": lambda: AuditView(ctx),
             "changes": lambda: ChangesView(ctx),
         }
@@ -315,6 +413,11 @@ class GraphdeckApp(App):
             "dashboard": "view-dashboard", "session": "view-session",
             "users": "view-users", "groups": "view-groups", "skus": "view-skus",
             "disabled-licensed": "view-disabled-licensed", "mailboxes": "view-mailboxes",
+            "teams-meeting-policies": "view-teams-meeting-policies",
+            "teams-messaging-policies": "view-teams-messaging-policies",
+            "spo-sites": "view-spo-sites",
+            "retention-policies": "view-retention-policies",
+            "dlp-policies": "view-dlp-policies",
             "audit": "view-audit", "changes": "view-changes",
         }[key]
         if key not in self._views:

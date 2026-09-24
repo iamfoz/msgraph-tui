@@ -1,0 +1,18 @@
+{
+  "meetingPolicies": [
+    {"identity": "Global", "description": "Global (org-wide default) policy", "allowMeetNow": true, "allowCloudRecording": true, "allowPSTNUsersToBypassLobby": false, "designatedPresenterRoleMode": "EveryoneUserOverride"},
+    {"identity": "Tag:AllOn", "description": "Everything enabled — pilot group", "allowMeetNow": true, "allowCloudRecording": true, "allowPSTNUsersToBypassLobby": true, "designatedPresenterRoleMode": "EveryoneUserOverride"},
+    {"identity": "Tag:RestrictedMeetings", "description": "Locked-down meetings for regulated teams", "allowMeetNow": false, "allowCloudRecording": false, "allowPSTNUsersToBypassLobby": false, "designatedPresenterRoleMode": "OrganizerOnlyUserOverride"},
+    {"identity": "Tag:KioskMode", "description": "Kiosk / shared devices", "allowMeetNow": false, "allowCloudRecording": false, "allowPSTNUsersToBypassLobby": false, "designatedPresenterRoleMode": "OrganizerOnlyUserOverride"}
+  ],
+  "messagingPolicies": [
+    {"identity": "Global", "description": "Global (org-wide default) policy", "allowUserEditMessage": true, "allowUserDeleteMessage": true, "allowGiphy": true, "allowMemes": true},
+    {"identity": "Tag:AllOn", "description": "Everything enabled — pilot group", "allowUserEditMessage": true, "allowUserDeleteMessage": true, "allowGiphy": true, "allowMemes": true},
+    {"identity": "Tag:NoFun", "description": "No Giphy/memes for regulated teams", "allowUserEditMessage": true, "allowUserDeleteMessage": false, "allowGiphy": false, "allowMemes": false}
+  ],
+  "onlineUsers": [
+    {"id": "u-0001", "userPrincipalName": "ada.lovelace@contoso.example", "displayName": "Ada Lovelace", "teamsMeetingPolicy": "Global", "teamsMessagingPolicy": "Global"},
+    {"id": "u-0002", "userPrincipalName": "grace.hopper@contoso.example", "displayName": "Grace Hopper", "teamsMeetingPolicy": "Tag:RestrictedMeetings", "teamsMessagingPolicy": "Global"},
+    {"id": "u-0003", "userPrincipalName": "alan.turing@contoso.example", "displayName": "Alan Turing", "teamsMeetingPolicy": "Global", "teamsMessagingPolicy": "Tag:NoFun"}
+  ]
+}

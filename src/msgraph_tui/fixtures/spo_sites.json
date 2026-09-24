@@ -1,0 +1,6 @@
+[
+  {"url": "https://contoso.sharepoint.com/sites/finance", "title": "Finance", "storageQuota": 1048576, "storageUsedCurrent": 204800, "sharingCapability": "Disabled", "lockState": "Unlock", "template": "STS#3", "owner": "grace.hopper@contoso.example"},
+  {"url": "https://contoso.sharepoint.com/sites/engineering", "title": "Engineering", "storageQuota": 2097152, "storageUsedCurrent": 917504, "sharingCapability": "ExistingExternalUserSharingOnly", "lockState": "Unlock", "template": "STS#3", "owner": "ada.lovelace@contoso.example"},
+  {"url": "https://contoso.sharepoint.com/sites/marketing-external", "title": "Marketing (partner collab)", "storageQuota": 524288, "storageUsedCurrent": 61440, "sharingCapability": "ExternalUserAndGuestSharing", "lockState": "Unlock", "template": "STS#3", "owner": "hedy.lamarr@contoso.example"},
+  {"url": "https://contoso.sharepoint.com/sites/research-archive", "title": "Research Archive", "storageQuota": 1048576, "storageUsedCurrent": 1040000, "sharingCapability": "Disabled", "lockState": "ReadOnly", "template": "STS#3", "owner": "annie.easley@contoso.example"}
+]
